@@ -284,7 +284,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U22 Booking failure paths
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/booking.flow.test.ts` failure-path tests (one per § 2.5.6 row: timeout → same-key retry after the 0.5 s wait; 3 timeouts → truthful "nothing was booked"; `slot_taken` → options without the slot; `hold_expired` same price → key `:2` booked without asking; new price → approval voided + new card; slot gone → voided + options); suite 192/192, evals 11/11 (6–11 new; eval 9 trace `book:timeout → get_booking_status:booked`). QA `/tmp/verify-U22/drive.txt`: dev-server happy path through Vite :5173 → booked, operation `succeeded`, trace `book → get_booking_status → succeeded`.
 - **Depends on.** U21.
 - **Covers.** MH-3, NFR-2, NFR-3, V-4, R7 (key change).
 - **Build.** Timeout → status `booked` → succeeded. Timeout → `not_found` → wait 0.5 s then 1 s on the clock → retry with the same key, up to 3 attempts. `slot_taken` → back to options. `hold_expired` → re-hold: the same price keeps the approval with key `:2`, a new price voids it, and a gone slot goes back to options. The key change is one transaction. Retry exhaustion gives a truthful reply from the checked status.

@@ -34,6 +34,8 @@ export type EvalScenarioStep =
       cardPriceDiffersFromSearch?: boolean;
       /** provider-side bookings this user's runs created (seeded history excluded) */
       agentBookings?: number;
+      /** the last run's tool calls, in order, as "tool:result" (e.g. "book:timeout", "get_booking_status:booked") */
+      lastRunToolCalls?: string[];
     }
   | { step: "click"; decision: "approve" | "decline" };
 
@@ -89,25 +91,31 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
   let lastReply: string | null = null;
   let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
+  let lastRunId: string | null = null;
   let pickedSearchPrice: number | null = null;
 
-  const send = async (label: string, text: string, busyOk = false): Promise<void> => {
-    const result = await service.sendMessage(userId, conversationId, text, randomUUID());
+  const keep = (result: Awaited<ReturnType<typeof service.decideApproval>>, label: string, busyOk = false): void => {
     if (!result.ok) {
       if (busyOk && result.code === "CONVERSATION_BUSY") lastOutcome = result.code;
-      else recordFailure(`${label} "${text}" → ${result.code}: ${result.message}`);
+      else recordFailure(`${label} → ${result.code}: ${result.message}`);
       return;
     }
     lastReply = result.reply.message.text;
     lastParts = result.reply.message.parts;
     lastOutcome = result.reply.outcome;
+    lastRunId = result.reply.runId;
   };
-  const keep = (result: Awaited<ReturnType<typeof service.decideApproval>>, label: string): void => {
-    if (!result.ok) return recordFailure(`${label} → ${result.code}: ${result.message}`);
-    lastReply = result.reply.message.text;
-    lastParts = result.reply.message.parts;
-    lastOutcome = result.reply.outcome;
-  };
+  const send = async (label: string, text: string, busyOk = false): Promise<void> =>
+    keep(await service.sendMessage(userId, conversationId, text, randomUUID()), `${label} "${text}"`, busyOk);
+  const toolCallsOf = (runId: string | null): string[] =>
+    (runId ? (db.prepare(`SELECT data FROM trace_event WHERE run_id = ? AND type = 'tool_call' ORDER BY seq`).all(runId) as { data: string }[]) : []).map(
+      ({ data }) => {
+        const call = JSON.parse(data) as { tool: string; errorCode: string | null; result?: string };
+        if (call.errorCode) return `${call.tool}:${call.errorCode}`;
+        if (call.tool === "get_booking_status") return `${call.tool}:${(JSON.parse(call.result ?? "{}") as { status?: string }).status}`;
+        return `${call.tool}:ok`;
+      },
+    );
   const partOf = (type: string) => lastParts.find((p) => p.type === type);
 
   for (const step of scenario.steps) {
@@ -161,6 +169,9 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
         } else if (step.cardPriceDiffersFromSearch && card.price === pickedSearchPrice) {
           recordFailure(`expect card price ≠ search price ₹${pickedSearchPrice} → same`);
         }
+      }
+      if (step.lastRunToolCalls && JSON.stringify(toolCallsOf(lastRunId)) !== JSON.stringify(step.lastRunToolCalls)) {
+        recordFailure(`expect last run's tool calls ${step.lastRunToolCalls.join(" → ")} → got ${toolCallsOf(lastRunId).join(" → ")}`);
       }
       if (step.agentBookings !== undefined) {
         const { c } = db.prepare(`SELECT COUNT(*) AS c FROM mock_booking WHERE user_id = ? AND id NOT LIKE 'mb-demo%'`).get(userId) as { c: number };

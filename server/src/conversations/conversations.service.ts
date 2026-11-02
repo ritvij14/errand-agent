@@ -71,7 +71,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
         trace,
         search: gateway.searchProviders,
         hold: gateway.holdSlot,
-        book: { book: gateway.book, status: gateway.getBookingStatus },
+        book: { book: gateway.book, status: gateway.getBookingStatus, retryWaitsMs: mockSettings.retryWaitsMs },
       });
       const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
       const toolCalls = gateway.toolCallsUsed();

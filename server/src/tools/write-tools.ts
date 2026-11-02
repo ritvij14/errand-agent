@@ -75,13 +75,15 @@ export const book = (
   const hold = db.prepare(`SELECT * FROM mock_hold WHERE id = ?`).get(args.holdId) as
     | { user_id: string; provider_id: string; slot: string; quoted_price: number; expires_at: number }
     | undefined;
-  if (!hold || hold.user_id !== userId || hold.expires_at <= opts.clock.now().getTime()) {
+  const forced = hold ? forcedOutcome(opts, "book") : undefined; // "hold_expired" ages the hold out now
+  if (forced === "hold_expired" && hold) db.prepare(`UPDATE mock_hold SET expires_at = ? WHERE id = ?`).run(opts.clock.now().getTime(), args.holdId);
+  if (!hold || hold.user_id !== userId || hold.expires_at <= opts.clock.now().getTime() || forced === "hold_expired") {
     const expiry = rememberedFinal(db, opts, "book", userId, args.idempotencyKey, "hold_expired");
     return { ok: false, error: "hold_expired", transient: false, ...expiry };
   }
 
   const attempt = nextAttempt(db, "book", args.idempotencyKey);
-  const outcome = forcedOutcome(opts, "book") ?? drawBookOutcome(opts, args.idempotencyKey, attempt);
+  const outcome = forced ?? drawBookOutcome(opts, args.idempotencyKey, attempt);
   if (outcome === "timeout" || outcome === "timeout_booked") {
     opts.clock.advanceMs(settings.timeoutPauseMs); // the pause is on the clock (settings table)
   }

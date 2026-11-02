@@ -23,6 +23,7 @@ An in-process mock of the brief's fixed provider-tool contract: 5 services, 5 Be
 - **`completed` is derived**: a stored `'booked'` whose slot is past reads as `completed` (schema.md); only `booked`/`cancelled` are stored.
 - **`get_provider` is the only tool returning free text.** It returns reviews as `{ text }` only — the `injection_kind` fixture label stays in the database for eval seeding. The gateway (U15) wraps the text as untrusted and computes the `suspected_injection` flag for traces.
 - **Free slots are never stored** — recomputed from `seed | slots | provider | date` and filtered by past (calendar clock), booked, unexpired holds.
+- **Forced `book` outcomes**: `ok`, `timeout`, `timeout_booked`, `slot_taken`, and (U22) `hold_expired` — which ages the hold out on the spot so the provider answers exactly as for a real expiry.
 - **Forced outcomes for `hold_slot`** (NFR-4, U19): `price_changed` quotes `round(price × 1.1)` (a visible change inside the ±15% band); `slot_unavailable` refuses a free slot and holds nothing. Evals queue them with the runner's `force` step.
 - **Public API** is `tools/index.ts` (gateway, settings, seed, `slotWindow`, types); other features import only from there.
 

@@ -6,7 +6,7 @@ import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-wind
 import type { Trace } from "../tracing/index.js";
 import type { ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, searchRange, slotLabel, type OptionBlock } from "./options.js";
-import { executeBook, operationRepo, startBookOperation, type BookTools } from "../booking/index.js";
+import { executeBook, MAX_BOOK_ATTEMPTS, operationRepo, startBookOperation, type BookTools, type OperationRecord } from "../booking/index.js";
 import { APPROVAL_MAX_AGE_MS, approvalCardPart, approvalRepo, type ApprovalRecord } from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
@@ -111,6 +111,13 @@ const timeFactHasBounds = (fact: Fact & { value: TimeWindow | null } | undefined
   const w = fact?.value;
   return !!w && (w.dateFrom !== null || w.dateTo !== null || w.earliest !== null || w.latest !== null);
 };
+
+type Held = { holdId: string; expiresAt: number; quotedPrice: number };
+
+/** The provider's display name from the saved option blocks. */
+const nameOf = (w: WorkflowRow, providerId: string): string =>
+  (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === providerId)?.provider.name ?? providerId;
+const rupees = (n: number): string => `₹${n.toLocaleString("en-IN")}`;
 
 export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => {
   let trace: Trace | undefined;
@@ -437,32 +444,32 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return { phase: w.phase, reply, facts: w.facts, parts: [{ type: "option_blocks", blocks: w.candidates as OptionBlock[] }] };
   }
 
+  /** NFR-3: a slot that can't be had is an answer, not a glitch — drop it and show what is left. */
+  function showRemaining(w: WorkflowRow, gone: Selection, reply: string, code?: string): ApplyOutcome {
+    const remaining = (w.candidates as OptionBlock[])
+      .map((b) => (b.provider.id === gone.providerId ? { ...b, slots: b.slots.filter((s) => s.start !== gone.slot) } : b))
+      .filter((b) => b.slots.length > 0);
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      candidates: remaining,
+      selection: null,
+      hold: null,
+      phase: remaining.length ? "choosing" : "searching",
+    }));
+    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    if (!remaining.length) return advance(saved.workflow);
+    return { ...optionsOutcome(saved.workflow, reply), ...(code ? { code } : {}) };
+  }
+
   /**
-   * `holding` needs no user input: hold the picked slot, then wait for approval with a
-   * pending record built from the saved selection and hold — never from model text (§ 2.5.5).
-   * The workflow save and the approval insert share one transaction.
+   * Wait for approval with a pending record built from the saved selection and hold —
+   * never from model text (§ 2.5.5). The workflow save and the approval insert share
+   * one transaction; the card is drawn from the record.
    */
-  function holdSelection(w: WorkflowRow): ApplyOutcome {
+  function awaitApproval(w: WorkflowRow, held: Held, reply?: string): ApplyOutcome {
     const selection = w.selection!;
-    const blocks = w.candidates as OptionBlock[];
-    const block = blocks.find((b) => b.provider.id === selection.providerId)!;
-    const held = hold!(selection);
-    if (!held.ok) {
-      // NFR-3: an answer, not a glitch — drop that slot and show what is left
-      const remaining = blocks
-        .map((b) => (b.provider.id === selection.providerId ? { ...b, slots: b.slots.filter((s) => s.start !== selection.slot) } : b))
-        .filter((b) => b.slots.length > 0);
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: remaining, selection: null, phase: remaining.length ? "choosing" : "searching" }));
-      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-      if (!remaining.length) return advance(saved.workflow);
-      return { ...optionsOutcome(saved.workflow, "That slot was just taken — here are the options still open."), code: held.error };
-    }
     const result = db.transaction(() => {
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
-        ...wf,
-        hold: { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice },
-        phase: "awaiting_approval",
-      }));
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, hold: held, phase: "awaiting_approval" }));
       if (!saved.ok || !saved.workflow) return undefined;
       const record = approvals.createPending(
         {
@@ -472,20 +479,30 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
           action: "book",
           provider_id: selection.providerId,
           slot: selection.slot,
-          price: held.data.quotedPrice, // V-2: the user approves the quoted price
-          hold_id: held.data.holdId,
+          price: held.quotedPrice, // V-2: the user approves the quoted price
+          hold_id: held.holdId,
         },
         nowMs(),
       );
       return { workflow: saved.workflow, record };
     })();
     if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-    trace?.record("approval_event", { approvalId: result.record.id, event: "created", action: "book", providerId: result.record.provider_id, slot: result.record.slot, price: result.record.price });
-    const changed = result.record.price !== block.provider.price;
-    const reply = changed
-      ? `The provider quoted ₹${result.record.price.toLocaleString("en-IN")} for this slot (the search showed ₹${block.provider.price.toLocaleString("en-IN")}). Approve to book it at the new price, or decline.`
-      : `Here are the details — approve to book, or decline.`;
-    return { phase: "awaiting_approval", reply, facts: result.workflow.facts, parts: [approvalCardPart(result.record, block.provider.name)] };
+    const { record } = result;
+    trace?.record("approval_event", { approvalId: record.id, event: "created", action: "book", providerId: record.provider_id, slot: record.slot, price: record.price });
+    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.price;
+    const text =
+      reply ??
+      (searchPrice !== undefined && record.price !== searchPrice
+        ? `The provider quoted ${rupees(record.price)} for this slot (the search showed ${rupees(searchPrice)}). Approve to book it at the new price, or decline.`
+        : `Here are the details — approve to book, or decline.`);
+    return { phase: "awaiting_approval", reply: text, facts: result.workflow.facts, parts: [approvalCardPart(record, nameOf(w, record.provider_id))] };
+  }
+
+  /** `holding` needs no user input: hold the picked slot, then wait for approval. */
+  function holdSelection(w: WorkflowRow): ApplyOutcome {
+    const held = hold!(w.selection!);
+    if (!held.ok) return showRemaining(w, w.selection!, "That slot was just taken — here are the options still open.", held.error);
+    return awaitApproval(w, { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice });
   }
 
   /**
@@ -498,20 +515,68 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const outcome = executeBook(db, clock, bookTools!, op, () => {
       current = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: "verifying" })).workflow ?? current;
     });
-    trace?.record("operation_event", { event: outcome.ok ? "succeeded" : "failed", kind: "book", key: op.idempotency_key, result: outcome.ok ? outcome.bookingId : outcome.checkedStatus });
+    if (!outcome.ok && outcome.kind === "hold_expired") return reHold(current, op);
+    trace?.record("operation_event", {
+      event: outcome.ok ? "succeeded" : "failed",
+      kind: "book",
+      key: op.idempotency_key,
+      result: outcome.ok ? outcome.bookingId : outcome.checkedStatus,
+    });
+    if (!outcome.ok && outcome.kind === "slot_taken") {
+      // the approval stays used; the user picks again from what is left
+      return showRemaining(current, w.selection!, "That slot was taken by someone else just now, so nothing was booked — here are the options still open.", "slot_taken");
+    }
     const finished = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: outcome.ok ? "done" : "failed" }));
     const facts = (finished.workflow ?? current).facts;
     if (!outcome.ok) {
-      return { phase: "failed", reply: "Nothing was booked — I checked with the provider and there is no booking for this request. Ask me to try again.", facts, code: "BOOKING_FAILED" };
+      return {
+        phase: "failed",
+        reply: `Nothing was booked — I checked with the provider and there is no booking for this request (status: ${outcome.checkedStatus}). Ask me to try again.`,
+        facts,
+        code: "BOOKING_FAILED",
+      };
     }
     const selection = w.selection!;
-    const name = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.name ?? selection.providerId;
-    const price = w.hold?.quotedPrice ?? 0;
     return {
       phase: "done",
-      reply: `Booked: ${name} on ${slotLabel(selection.slot)}, ₹${price.toLocaleString("en-IN")}. Booking id: ${outcome.bookingId}.`,
+      reply: `Booked: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${outcome.bookingId}.`,
       facts,
     };
+  }
+
+  /**
+   * § 2.5.6 `hold_expired`: re-hold the same provider + slot. Same price → the next key
+   * (`:2`) and book again — the approval stands (V-4). A new price or a gone slot voids
+   * the approval: nothing is booked until the user decides again.
+   */
+  function reHold(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
+    const selection = w.selection!;
+    const approval = approvals.getById(op.approval_id)!;
+    const held = hold!(selection);
+    if (held.ok && held.data.quotedPrice === approval.price && op.hold_seq < MAX_BOOK_ATTEMPTS) {
+      const next = operations.nextKey(op.id, held.data.holdId, "hold_expired", nowMs());
+      trace?.record("operation_event", { event: "key_changed", kind: "book", key: next.idempotency_key, result: "hold_expired" });
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+        ...wf,
+        hold: { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice },
+      }));
+      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      return executeOperation(saved.workflow);
+    }
+    const reason = held.ok ? "price_changed" : "slot_changed";
+    operations.finish(op.id, "failed", { error: "hold_expired", rehold: held.ok ? reason : held.error }, nowMs());
+    trace?.record("operation_event", { event: "failed", kind: "book", key: op.idempotency_key, result: reason });
+    if (approvals.voidUsed(approval.id, reason, nowMs())) {
+      trace?.record("approval_event", { approvalId: approval.id, event: "voided", voidReason: reason });
+    }
+    if (!held.ok) {
+      return showRemaining(w, selection, "The hold on that slot ran out and the slot is gone now, so nothing was booked — here are the options still open.", "slot_changed");
+    }
+    return awaitApproval(
+      w,
+      { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice },
+      `The hold ran out and the provider now quotes ${rupees(held.data.quotedPrice)} instead of ${rupees(approval.price)}, so nothing was booked yet. Approve the new price, or decline.`,
+    );
   }
 
   /** Phases that need no user input run now (§ 2.5.3 step 6): searching, holding, executing. */

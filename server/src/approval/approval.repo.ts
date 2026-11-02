@@ -74,6 +74,14 @@ export const approvalRepo = (db: Db) => ({
       .prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status IN ('pending','approved')`)
       .run(reason, now, id).changes === 1,
 
+  /**
+   * used → voided, only when its operation re-held and the slot or price changed before
+   * anything was booked (§ 2.5.6 hold_expired rows): the user must approve the new details.
+   */
+  voidUsed: (id: string, reason: "price_changed" | "slot_changed", now: number): boolean =>
+    db.prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status = 'used'`).run(reason, now, id)
+      .changes === 1,
+
   /** approved → used (§ 2.5.5 life step 5): single use; false if it wasn't approved. */
   markUsed: (id: string, now: number): boolean =>
     db.prepare(`UPDATE approval SET status = 'used', used_at = ? WHERE id = ? AND status = 'approved'`).run(now, id).changes === 1,

@@ -79,4 +79,18 @@ export const operationRepo = (db: Db) => ({
       `UPDATE operation SET status = ?, result = ?, updated_at = ? WHERE id = ? AND status = 'in_flight'`,
     ).run(status, JSON.stringify(result), now, id);
   },
+
+  /**
+   * A new hold gets a new key (`<op id>:<n+1>`) — the provider remembers the old key's
+   * final `hold_expired`. One statement, so the next key's state and the previous key's
+   * terminal outcome are committed together (R7).
+   */
+  nextKey: (id: string, holdId: string, previousOutcome: string, now: number): OperationRecord => {
+    db.prepare(
+      `UPDATE operation SET hold_seq = hold_seq + 1, idempotency_key = id || ':' || (hold_seq + 1), request = ?, attempts = 0,
+         result = json_object('previousKey', idempotency_key, 'previousOutcome', ?), updated_at = ?
+       WHERE id = ? AND status = 'in_flight'`,
+    ).run(JSON.stringify({ holdId }), previousOutcome, now, id);
+    return db.prepare(`SELECT * FROM operation WHERE id = ?`).get(id) as OperationRecord;
+  },
 });
