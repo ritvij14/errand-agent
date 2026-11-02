@@ -55,7 +55,7 @@ COMPULSORY TASK - Always be clear on the major release of the tech stack being u
 
 **Queue / Jobs:** None — synchronous, in-process.
 
-**Testing:** Vitest 5 — https://vitest.dev/ (unit / integration / flow layers) + a custom offline eval CLI (a Node script that drives ≥15 scripted scenarios against the agent core and generates the eval table — MH-8, deliverable 3). The eval suite is kept separate from Vitest by design.
+**Testing:** Vitest 5 — https://vitest.dev/ (unit / integration / flow layers) + a custom offline eval CLI (a Node script that drives ≥15 scripted scenarios against the agent core and generates the eval table — MH-8, deliverable 3). The eval suite is kept separate from Vitest by design. Client component tests: React Testing Library 16 — https://testing-library.com/docs/react-testing-library/intro/ (on Vitest; added to `client` in plan unit U14 — ADR-006). Manual browser QA is one checklist at the end of the build plan, not per unit.
 
 **Key External Integrations:**
 
@@ -166,7 +166,7 @@ Before writing a `useEffect`, check which category it falls into:
 
 > Files listed here are load-bearing. Do not refactor, rename, or change their interfaces without explicit user confirmation.
 
-- [Add project-specific critical paths]
+- `.pi/extensions/project-hooks.ts` — automatically starts documentation wrap-up before Pi finishes after file edits; changing its lifecycle or continuation guard can skip review or create an endless loop.
 
 - **Living rule:** When a file or path is identified as load-bearing, add it here immediately with a one-line description of why it's critical.
 
@@ -351,6 +351,8 @@ If any tool, command, MCP tool, skill, or sub-agent fails 5 times consecutively,
 3. Report to user: "Hit 5-retry limit on [operation]. Need your help to proceed. Note: I've cleared `.pi/session-changed` — once resolved, remind me to recreate it for documentation review at session end."
 4. Wait for user input — do not attempt anything else.
 
-**At the end of every session:**
+**Before finishing after file edits:**
 
-- Run `/wrap-up` to complete documentation review before closing the session.
+- **Wrap-up is automatic, not a user reminder.** `.pi/extensions/project-hooks.ts` marks `edit` / `write` tool results in `.pi/session-changed`. On `agent_before_settle`, it injects `.pi/prompts/wrap-up.md` and requests another model turn, including in headless mode. `/wrap-up` remains available manually.
+- One automatic wrap-up attempt is allowed per user request. Its own documentation edits do not recursively start another attempt. If cleanup is incomplete or the prompt cannot load, retain the flag and report the failure; never claim review completed. Aborted or errored runs do not automatically restart model work.
+- Review feature or infrastructure docs only where relevant; documentation-only work does not require unrelated feature-doc updates. Clear `.pi/session-changed` only after review and all edits are complete. Reload Pi with `/reload` after changing the extension.

@@ -183,4 +183,34 @@ The system is deployed beyond one machine (Level 2): HTTPS + `Secure` cookies, s
 
 ---
 
+### ADR-006: Client QA uses Vitest + React Testing Library; the manual browser checklist comes once, at the end
+
+**Date:** 2026-11-02
+**Status:** Active
+
+**Decision:**
+The `client` workspace gets Vitest + React Testing Library 16 for component tests (rendering from API part shapes, disabled states, inline errors). Each client unit in `docs/plans/build.md` is proven by those tests plus a curl drive of the same endpoints through Vite (`:5173/api`). The operator's manual click-through in a browser is written once as a checklist in the final plan unit (U40), not run per unit.
+
+**Context:**
+The build plan needs every unit to be verifiable on its own. Server units are proven by Vitest, eval scenarios and API drives; the client had no test tooling. Operator chose this option on 2026-11-02 and asked to defer their manual checklist until all units are done.
+
+**Options considered:**
+
+- **RTL component tests + deferred manual checklist ([chosen])**
+- **Playwright headless e2e** — strongest end-to-end proof and screenshots, but adds a ~150 MB browser download and a second test tool
+- **Manual checklist only** — least code, but nothing reruns automatically
+
+**Reasoning:**
+One test runner (Vitest) across both workspaces keeps tooling small. The client is a thin page that renders server-built parts, so component tests cover most of its logic; the server's own tests and evals cover the behavior behind it.
+
+**Tradeoffs accepted:**
+
+- No automated proof that the real page works end to end in a browser until the U40 manual pass
+- UI regressions between units can only be caught by component tests
+
+**Revisit when:**
+A UI bug slips past component tests and is found in the manual pass — then add a Playwright smoke for that journey.
+
+---
+
 <!-- Add new ADRs below as decisions are made -->
