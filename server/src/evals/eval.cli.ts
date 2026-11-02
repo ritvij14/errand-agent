@@ -32,6 +32,7 @@ export const runAllEvals = async (): Promise<{ failed: number; total: number; ro
   ];
   let failed = 0;
   let total = 0;
+  await mkdir(evalDataDir, { recursive: true }); // git-ignored, so absent in a fresh clone
   for (const scenario of Object.values(SCENARIOS) as EvalScenario[]) {
     total += 1;
     // fresh database per scenario (§ 2.5.10), in server/data (git-ignored)
