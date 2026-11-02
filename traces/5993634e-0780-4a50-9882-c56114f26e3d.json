@@ -1,0 +1,171 @@
+{
+  "run": {
+    "id": "5993634e-0780-4a50-9882-c56114f26e3d",
+    "conversationId": "0e918a4e-802b-4459-aacb-4fd4c8feeced",
+    "trigger": "message",
+    "startedAt": 1793649286380,
+    "endedAt": 1793649296380,
+    "outcome": "completed",
+    "modelCalls": 2,
+    "toolCalls": 2
+  },
+  "events": [
+    {
+      "seq": 1,
+      "type": "run_started",
+      "clockAt": 1793649286380,
+      "durationMs": null,
+      "data": {
+        "trigger": "message",
+        "conversationId": "0e918a4e-802b-4459-aacb-4fd4c8feeced",
+        "userId": "u-demo-alice",
+        "phase": "awaiting_approval"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "model_call",
+      "clockAt": 1793649286380,
+      "durationMs": null,
+      "data": {
+        "job": "read",
+        "input": "yes",
+        "output": "decision",
+        "tokens": null,
+        "cost": null,
+        "notAvailable": "scripted model"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "approval_event",
+      "clockAt": 1793649286380,
+      "durationMs": null,
+      "data": {
+        "event": "approved",
+        "via": "typed",
+        "action": "book",
+        "providerId": "mp-011",
+        "slot": "2026-11-04T10:00:00+05:30",
+        "price": 584,
+        "approvalId": "74afff56-0f6c-424a-b8f7-647268176678"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "state_transition",
+      "clockAt": 1793649286380,
+      "durationMs": null,
+      "data": {
+        "fromPhase": "awaiting_approval",
+        "toPhase": "executing",
+        "reason": "apply"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "operation_event",
+      "clockAt": 1793649286380,
+      "durationMs": null,
+      "data": {
+        "event": "created",
+        "kind": "book",
+        "key": "2f7e5951-335d-4b15-8fb8-53e57392dcad:1"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "tool_call",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "tool": "book",
+        "args": {
+          "holdId": "df8b42cf-3988-4f45-a6bf-2466883b6caa",
+          "idempotencyKey": "2f7e5951-335d-4b15-8fb8-53e57392dcad:1"
+        },
+        "attempt": 1,
+        "ok": false,
+        "errorCode": "timeout",
+        "transient": true,
+        "result": "error: timeout"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "state_transition",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "fromPhase": "executing",
+        "toPhase": "verifying",
+        "reason": "apply"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "tool_call",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "tool": "get_booking_status",
+        "args": {
+          "idempotencyKey": "2f7e5951-335d-4b15-8fb8-53e57392dcad:1"
+        },
+        "attempt": 1,
+        "ok": true,
+        "errorCode": null,
+        "transient": null,
+        "result": "{\"status\":\"booked\",\"bookingId\":\"686f6f0d-eb17-4b6f-9dcc-b5ac9e4a64ee\"}"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "operation_event",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "event": "succeeded",
+        "kind": "book",
+        "key": "2f7e5951-335d-4b15-8fb8-53e57392dcad:1",
+        "result": "686f6f0d-eb17-4b6f-9dcc-b5ac9e4a64ee"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "state_transition",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "fromPhase": "verifying",
+        "toPhase": "done",
+        "reason": "apply"
+      }
+    },
+    {
+      "seq": 11,
+      "type": "model_call",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "job": "write",
+        "output": "Booked: Deva Pipe Care on Wed 4 Nov at 10:00, ₹584. Booking id: 686f6f0d-eb17-4b6f-9dcc-b5ac9e4a64ee.",
+        "tokens": null,
+        "cost": null,
+        "notAvailable": "scripted model"
+      }
+    },
+    {
+      "seq": 12,
+      "type": "run_ended",
+      "clockAt": 1793649296380,
+      "durationMs": null,
+      "data": {
+        "outcome": "completed",
+        "modelCalls": 2,
+        "toolCalls": 2,
+        "durationMs": 10004
+      }
+    }
+  ]
+}

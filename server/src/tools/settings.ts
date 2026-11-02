@@ -27,3 +27,27 @@ export const createMockSettings = (): MockSettings => ({
 });
 
 export const DEFAULT_SEED = "errand-agent-v1";
+
+/**
+ * The dev/demo-only forced-outcome knob (2.5.4, R12): `DEMO_FORCE="book=timeout_booked"`
+ * forces the next call of each named tool once, so a demo can show a forced
+ * failure live. Off unless set. Evals never read it — they queue their own outcomes.
+ */
+export const demoForcedQueue = (
+  spec: string | undefined,
+): { take: (tool: string, nth: number) => { outcome: string } | undefined } => {
+  const queued = new Map(
+    (spec ?? "")
+      .split(",")
+      .map((pair) => pair.split("=").map((s) => s.trim()))
+      .filter((p): p is [string, string] => p.length === 2 && !!p[0] && !!p[1]),
+  );
+  return {
+    take: (tool) => {
+      const outcome = queued.get(tool);
+      if (outcome === undefined) return undefined;
+      queued.delete(tool);
+      return { outcome };
+    },
+  };
+};

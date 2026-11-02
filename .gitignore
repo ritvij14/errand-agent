@@ -10,4 +10,6 @@ dist/
 .pi/*.log
 .vitest/
 server/data/
-traces/
+traces/*
+# deliverable 5: the committed timeout-after-success trace (U37)
+!traces/5993634e-0780-4a50-9882-c56114f26e3d.json

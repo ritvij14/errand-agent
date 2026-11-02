@@ -17,6 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "evals": "npm run evals -w server",
+    "reset": "npm run reset -w server",
+    "trace:export": "npm run trace:export -w server --",
     "verify:up": "bash scripts/verify-up.sh",
     "verify:down": "bash scripts/verify-down.sh",
     "verify:reset": "bash scripts/verify-reset.sh"

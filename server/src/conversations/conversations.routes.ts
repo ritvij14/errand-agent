@@ -4,9 +4,18 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import type { AgentModel } from "../agent/index.js";
 import { verifyUser } from "../auth/index.js";
-import { createConversationService, type ConversationFailure } from "./conversations.service.js";
+import {
+  createConversationService,
+  type ConversationFailure,
+  type ConversationsDeps,
+} from "./conversations.service.js";
 
-export type ConversationsRouterDeps = { db: Db; clock: Clock; model: AgentModel };
+export type ConversationsRouterDeps = {
+  db: Db;
+  clock: Clock;
+  model: AgentModel;
+  mock?: ConversationsDeps["mock"];
+};
 
 // Route codes → HTTP status via the shared catalogue (§ 2.5.3).
 const STATUS: Record<string, number> = {
@@ -51,7 +60,13 @@ export const createConversationsRouter = (deps: ConversationsRouterDeps): Router
     try {
       const conversation = service.createConversation(userIdOf(req)!);
       res.status(201).json({
-        data: { id: conversation.id, title: conversation.title, createdAt: conversation.created_at, updatedAt: conversation.updated_at, busy: false },
+        data: {
+          id: conversation.id,
+          title: conversation.title,
+          createdAt: conversation.created_at,
+          updatedAt: conversation.updated_at,
+          busy: false,
+        },
       });
     } catch (err) {
       next(err);

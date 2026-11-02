@@ -11,3 +11,6 @@ One file per user-facing feature: what it is, how to drive it (HTTP through Vite
 | Provider details / injection | [injection.md](injection.md) |
 | Stated memory | [memory.md](memory.md) |
 | Trace panel + export | [traces.md](traces.md) |
+| Sign up / sign in / sign out | [auth.md](auth.md) |
+| Forced failures (demo knob), timeout after success | [demo-failures.md](demo-failures.md) |
+| Restart recovery, run caps | [recovery-and-caps.md](recovery-and-caps.md) |

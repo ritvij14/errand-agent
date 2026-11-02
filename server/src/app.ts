@@ -5,11 +5,11 @@ import type { Clock } from "./shared/clock.js";
 import type { AgentModel } from "./agent/index.js";
 import { sendError, sendUnknownError } from "./shared/errors.js";
 import { createAuthRouter, verifyUser } from "./auth/index.js";
-import { createConversationsRouter } from "./conversations/index.js";
+import { createConversationsRouter, type ConversationsRouterDeps } from "./conversations/index.js";
 import { createMemoryRouter } from "./memory/index.js";
 import { createTraceRouter } from "./tracing/index.js";
 
-export type AppDeps = { db: Db; clock: Clock; model: AgentModel };
+export type AppDeps = { db: Db; clock: Clock; model: AgentModel; mock?: ConversationsRouterDeps["mock"] };
 
 // CSRF (§ 2.5.1): every mutating request must carry Sec-Fetch-Site: same-origin and
 // a JSON content type; GETs skip the check. Checked before body parsing so a bad
@@ -38,7 +38,10 @@ export function createApp(deps: Partial<AppDeps> = {}) {
     app.use(csrfGuard);
     app.use(express.json({ type: () => true }));
     app.use("/api", createAuthRouter({ db: deps.db, clock: deps.clock }));
-    app.use("/api", createConversationsRouter({ db: deps.db, clock: deps.clock, model: deps.model }));
+    app.use(
+      "/api",
+      createConversationsRouter({ db: deps.db, clock: deps.clock, model: deps.model, mock: deps.mock }),
+    );
     app.use("/api", createMemoryRouter({ db: deps.db, clock: deps.clock }));
     app.use("/api", createTraceRouter({ db: deps.db, clock: deps.clock }));
     // anything that mutates should know who is calling — future routers check verifyUser(deps.db, deps.clock, req)

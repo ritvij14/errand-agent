@@ -468,7 +468,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U37 Demo readiness
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `server/src/setup.test.ts` (knob off unless `DEMO_FORCE` is set; forces the named tool's next call once, then draws normally; comma list; `resetDatabase` wipes an altered db and leaves the seeded world + exactly the demo users). `server/src/setup.ts` (`openAppDatabase` / `resetDatabase`, shared by `index.ts` and `reset.cli.ts`), `npm run reset`, root `npm run trace:export`, `tools/settings.ts` `demoForcedQueue` wired through `createApp` → router → service. Server 300/300. QA: `DEMO_FORCE=book=timeout_booked npm run verify:reset`, alice books Deva Pipe Care → "Booked: … id 686f6f0d…"; run `5993634e…` trace: `book` → `timeout` then `get_booking_status` → `booked`; exported and committed as `traces/5993634e-0780-4a50-9882-c56114f26e3d.json` (un-ignored). Verify map completed: `auth.md`, `demo-failures.md`, `recovery-and-caps.md`.
 - **Depends on.** U36.
 - **Covers.** Deliverables 5 and 6 setup, § 2.3 reset command, the U03 demo knob.
 - **Build.** `npm run reset` wipes and reseeds. The dev-only forced-outcome knob from U03. Produce a real timeout-after-success run in the dev app and export its raw trace to the path named in `docs/submission-checklist.md`. Complete the `verify` feature map.

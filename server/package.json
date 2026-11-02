@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "evals": "tsx src/evals/eval.cli.ts",
-    "trace:export": "tsx src/tracing/trace-export.cli.ts"
+    "trace:export": "tsx src/tracing/trace-export.cli.ts",
+    "reset": "tsx src/reset.cli.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

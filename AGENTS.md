@@ -256,7 +256,9 @@ npm test
 - `npm run build` — compiles the server (`tsc`, emits `server/dist`) and builds the client (`vite build`)
 - `npm run typecheck -w server` / same in `client/` — TypeScript-only sanity check
 
-Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shape.
+- `npm run reset` — wipes `server/data/errand.db` and reseeds the mock world + demo users (stop the dev server first; `npm run verify:reset` does down → wipe → up)
+- `npm run trace:export -- <run id>` — writes `traces/<run id>.json` (deliverable 5)
+- `DEMO_FORCE="book=timeout_booked" npm run dev` — dev/demo-only knob: forces the next call of each named tool once (never read by evals)
 
 ---
 
@@ -276,9 +278,9 @@ Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shap
 | Provider tool mocks  | docs/features/tool-mocks.md         | Fixed tool contract                   | Building |
 | Booking lifecycle    | docs/features/booking-lifecycle.md  | MH-3                                  | Building |
 | Approval gate        | docs/features/approval-gate.md      | MH-2                                  | Building |
-| Memory & preferences | docs/features/memory-preferences.md | MH-6                                  | Planned |
-| Traces               | docs/features/traces.md             | MH-7                                  | Planned |
-| Eval suite           | docs/features/eval-suite.md         | MH-8, deliverable 3                   | Planned |
+| Memory & preferences | docs/features/memory-preferences.md | MH-6                                  | Building |
+| Traces               | docs/features/traces.md             | MH-7                                  | Building |
+| Eval suite           | docs/features/eval-suite.md         | MH-8, deliverable 3                   | Building |
 | Web frontend         | docs/features/web-frontend.md       | Deliverable 6 demo                    | Building |
 
 ---
