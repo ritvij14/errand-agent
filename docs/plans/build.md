@@ -457,7 +457,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U36 Eval suite gate
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `coverageReport` (runner.ts) maps each brief must-cover category to scenario ids; `runner.test.ts` proves the accepted set passes, a removed category fails **by name** ("prompt injection" case), the 21x removal fails "limit exhaustion", and <15 scenarios can never pass; eval.cli adds a `❌ coverage` row to the table and exits 1 when the gate fails. All accepted scenarios present (E0 + 1–23 incl. 15b, 20a–c, 21a–d → 30 total); I-1…I-10 checked after every step. Clean-state root `npm test` green (296 + 30/30 + 34); regenerated table committed. `.npmrc` `engine-strict=true` added: a wrong-node run now fails instantly instead of surfacing argon2Sync TypeErrors across 145 tests. QA drives now use the committed harness (`scripts/verify-up|reset|down.sh`, `npm run verify:*`) — servers hot-reload, so drives never restart them and nothing destructive runs interactively.
 - **Depends on.** U25, U29, U30, U31, U33, U35.
 - **Covers.** MH-8, deliverable 3, R10.
 - **Build.** Fill any gap so all 23 accepted scenarios plus the R3 and 21a–21d additions run. Invariants I-1 to I-10 are checked after every step. A coverage check fails the run if any of the brief's 8 must-cover categories has no scenario.

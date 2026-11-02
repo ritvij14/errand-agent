@@ -1,6 +1,6 @@
 import { openDatabase, runMigrations } from "../shared/db.js";
 import { seedDemoUsers } from "../auth/index.js";
-import { runScenario, checkInvariants, type EvalScenario, describeSteps } from "./runner.js";
+import { runScenario, checkInvariants, coverageReport, type EvalScenario, describeSteps } from "./runner.js";
 import { SCENARIOS } from "./scenarios.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { execSync } from "node:child_process";
@@ -54,6 +54,7 @@ export const runAllEvals = async (): Promise<{ failed: number; total: number; ro
 
 const main = async (): Promise<void> => {
   const started = new Date().toISOString();
+  const missingCoverage = coverageReport(Object.keys(SCENARIOS));
   const { failed, total, rows } = await runAllEvals();
   await mkdir(join(repoRoot, "docs/evals"), { recursive: true });
   const header = [
@@ -64,8 +65,19 @@ const main = async (): Promise<void> => {
     `- Seed: every scenario's documented fixed seed (defaults in scenarios.ts)`,
     "",
   ];
-  await (await import("node:fs/promises")).writeFile(evalTablePath, [...header, ...rows, ""].join("\n"));
+  const coverageRow = missingCoverage.length
+    ? [
+        `| coverage | the brief's 8 must-cover categories all have a scenario | missing: ${missingCoverage.join(", ")} | ❌ | coverage check (U36) |`,
+      ]
+    : [];
+  await (
+    await import("node:fs/promises")
+  ).writeFile(evalTablePath, [...header, ...rows, ...coverageRow, ""].join("\n"));
   console.log(`\nEvals: ${total - failed}/${total} passed. Table written to docs/evals/eval-table.md`);
+  if (missingCoverage.length > 0) {
+    console.error(`coverage FAILED: missing ${missingCoverage.join(", ")}`);
+    process.exitCode = 1;
+  }
   if (failed > 0) {
     console.error(`${failed} eval(s) FAILED`);
     process.exitCode = 1;

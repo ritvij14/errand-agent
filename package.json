@@ -16,7 +16,10 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "evals": "npm run evals -w server"
+    "evals": "npm run evals -w server",
+    "verify:up": "bash scripts/verify-up.sh",
+    "verify:down": "bash scripts/verify-down.sh",
+    "verify:reset": "bash scripts/verify-reset.sh"
   },
   "devDependencies": {
     "concurrently": "^10.0.6",

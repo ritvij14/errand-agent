@@ -5,6 +5,13 @@ description: Scripted way to launch, health-check, drive and clean up this repo'
 
 # Verify — drive the real errand-agent app
 
+## Harness commands (use these, not ad-hoc launches)
+
+- `npm run verify:up` — start the dev servers, doctor them (Express + Vite + auth), remember the PID of the process this script started. Ready means usable.
+- `npm run verify:reset` — the same on a FRESH database: downs first, wipes the git-ignored `server/data/` while nothing is running, starts again. Never delete files under a live process.
+- `npm run verify:down` — tear down exactly the servers verify-up started (whole stored process group; never by name or port). Leave the servers up across units: `tsx watch` + Vite hot-reload every code change, so drives always see the current build — only down at the session's end.
+- Drive steps stay small, plain commands (one curl or one sqlite3 read at a time): no background `&`, no `pkill`, no `rm -rf` chains. Those are what trip approval prompts — the scripts exist so nothing interactive needs them.
+
 Architecture being verified: Express API on :3001, Vite dev server on :5173 proxying `/api` (ADR-001). The browser talks to :5173 only; agents drive the API directly on :3001.
 
 ## Launch

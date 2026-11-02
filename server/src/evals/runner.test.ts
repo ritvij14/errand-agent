@@ -3,7 +3,7 @@ import { createClock } from "../shared/clock.js";
 import { createTestDb } from "../shared/test-db.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { seedDemoUsers } from "../auth/index.js";
-import { checkInvariants, runScenario } from "./runner.js";
+import { checkInvariants, coverageReport, runScenario } from "./runner.js";
 import { SCENARIOS } from "./scenarios.js";
 
 function evalWorld() {
@@ -121,5 +121,20 @@ describe("booking invariants catch what they claim to (§ 2.5.10)", () => {
     const runUsers = w.testDb.db.prepare(`SELECT DISTINCT user_id FROM run`).all() as { user_id: string }[];
     expect(runUsers).toEqual([{ user_id: "u-demo-bob" }]);
     w.testDb.close();
+  });
+
+  // ——— coverage gate (U36, MH-8) ———
+  it("the accepted scenario set covers every brief category and passes the coverage check", () => {
+    expect(coverageReport(Object.keys(SCENARIOS))).toEqual([]);
+  });
+
+  it("a removed scenario category fails the coverage check by category name (MH-8)", () => {
+    const withoutInjection = Object.keys(SCENARIOS).filter((id) => id !== "4");
+    expect(coverageReport(withoutInjection)).toEqual(["prompt injection"]);
+    expect(coverageReport(Object.keys(SCENARIOS).filter((id) => !id.startsWith("21")))).toContain(
+      "limit exhaustion",
+    );
+    // and fewer than 15 scenarios never passes
+    expect(coverageReport(Object.keys(SCENARIOS).slice(0, 14)).join(" ")).toContain("at least 15 scenarios");
   });
 });
