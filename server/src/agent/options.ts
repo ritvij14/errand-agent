@@ -10,7 +10,8 @@ import type { TimeWindow } from "./time-window.js";
 // reader that parses it, so the two can't drift apart.
 export type OptionBlock = {
   provider: { id: string; name: string; rating: number; price: number };
-  slots: { start: string; pickText: string }[];
+  /** `label` is what the page shows; `pickText` is what it sends on Confirm */
+  slots: { start: string; label: string; pickText: string }[];
 };
 
 const DAY_LABEL = new Intl.DateTimeFormat("en-GB", {
@@ -75,7 +76,7 @@ export const buildOptions = (
     ok: true,
     blocks: ordered.map((x) => ({
       provider: { id: x.p.id, name: x.p.name, rating: x.p.rating, price: x.p.price },
-      slots: x.slots.map((start) => ({ start, pickText: pickText(x.p.name, start) })),
+      slots: x.slots.map((start) => ({ start, label: slotLabel(start), pickText: pickText(x.p.name, start) })),
     })),
   };
 };

@@ -1,12 +1,20 @@
 # Web Frontend — the chat page (§ 2.4, ADR-001)
 
-> Status: **In progress** — U14 landed the skeleton; option blocks/approval cards (U26), details + trace panel (U31/U35), memory panel (U34) follow.
+> Status: **In progress** — U14 landed the skeleton; U26 option blocks and approval cards; details + trace panel (U31/U35), memory panel (U34) follow.
 
 ## What exists after U14
 
 - **App.tsx**: `useMe()` gate → `<SignIn />` or `<Chat />`.
 - **SignIn** (`screens/SignIn.tsx`): sign-in / sign-up with inline field errors rendered from the server's `details` (ApiError.details).
 - **Chat** (`screens/Chat.tsx`): conversation list (title + busy marker), new conversation, messages oldest-first with roles, composer — **Send disabled while a reply is pending** (2.3); Enter submits; agent structural parts rendered via a part-renderer placeholder (U26 fills it).
+
+## Booking parts (U26, FR-9, FR-10, ADR-007)
+
+- `shared/parts.ts` — the part types (`option_blocks`, `approval_card`) and type guards; the page renders server-built parts and never re-derives times or prices (slots carry `label`, cards carry `slotLabel`, both formatted by the server's `slotLabel`).
+- `components/OptionBlocks.tsx` — one accordion per provider (`aria-expanded`; header shows ₹price and ★rating); slot buttons (`aria-pressed`, one selected at a time across blocks); **Confirm** is disabled until a slot is tapped and sends that slot's `pickText` as an ordinary chat message (no card id).
+- `components/ApprovalCard.tsx` — provider, slot label, price; Approve / Decline call `POST /api/approvals/:id/decision` (`useDecideApproval`).
+- `screens/Chat.tsx` — a typed message carries the **newest card's** `approvalId` (§ 2.5.5 rule 1: a typed yes answers the card on screen; the server ignores it for anything that isn't a decision). `busy` = any send or decision pending → Send, Confirm, Approve and Decline are all disabled (2.3).
+- Existing `function` components (`Chat`, `SignIn`, `App`) predate the arrow-function rule; new components are arrow functions. Not refactored here.
 
 ## Rules
 

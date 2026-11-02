@@ -72,6 +72,7 @@ describe("pick → hold → approval card", () => {
       action: "book",
       provider: { id: block.provider.id, name: block.provider.name },
       slot: record!.slot,
+      slotLabel: block.slots[0]!.label,
       price: record!.price,
       status: "pending",
     });

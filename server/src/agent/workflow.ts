@@ -643,7 +643,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       phase: w.phase,
       reply,
       facts: w.facts,
-      parts: [approvalCardPart(record, name)],
+      parts: [approvalCardPart(record, name, slotLabel(record.slot))],
       ...(code ? { code } : {}),
     };
   }
@@ -828,7 +828,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       phase: "awaiting_approval",
       reply: text,
       facts: result.workflow.facts,
-      parts: [approvalCardPart(record, nameOf(w, record.provider_id))],
+      parts: [approvalCardPart(record, nameOf(w, record.provider_id), slotLabel(record.slot))],
     };
   }
 

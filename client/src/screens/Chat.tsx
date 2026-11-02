@@ -1,6 +1,9 @@
 import { useState } from "react";
-import { useConversation, useConversations, useCreateConversation, useSendMessage, useSignOut } from "../shared/queries.js";
+import { useConversation, useConversations, useCreateConversation, useDecideApproval, useSendMessage, useSignOut } from "../shared/queries.js";
 import type { Message } from "../shared/api-client.js";
+import { isApprovalCard, isOptionBlocks } from "../shared/parts.js";
+import { OptionBlocks } from "../components/OptionBlocks.js";
+import { ApprovalCard } from "../components/ApprovalCard.js";
 
 // The chat page: conversation list + message view + composer (§ 2.4). Send is
 // disabled while a reply is pending (2.3: both sides block overlapping sends).
@@ -11,14 +14,19 @@ export function Chat() {
   const [selected, setSelected] = useState<string | null>(null);
   const conversation = useConversation(selected, selected !== null);
   const sendMessage = useSendMessage(selected ?? "");
+  const decide = useDecideApproval(selected ?? "");
   const [draft, setDraft] = useState("");
-  const busy = sendMessage.isPending || create.isPending || signOut.isPending;
+  // 2.3: nothing new is sent — typed, tapped or clicked — while a reply is pending
+  const busy = sendMessage.isPending || decide.isPending || create.isPending || signOut.isPending;
+  const messages = conversation.data?.messages ?? [];
+  // the newest card on screen: a typed yes / no answers that card (§ 2.5.5 rule 1)
+  const shownCardId = messages.flatMap((m) => m.parts ?? []).filter(isApprovalCard).at(-1)?.approvalId;
 
   const send = () => {
     const text = draft.trim();
     if (!text || !selected || busy) return;
     setDraft("");
-    sendMessage.mutate(text);
+    sendMessage.mutate({ text, approvalId: shownCardId });
   };
 
   return (
@@ -47,10 +55,16 @@ export function Chat() {
         </aside>
         <main className="flex flex-1 flex-col overflow-hidden">
           <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-neutral-200 p-3">
-            {(conversation.data?.messages ?? []).map((m: Message) => (
+            {messages.map((m: Message) => (
               <div key={m.id} className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-neutral-900 text-white" : "bg-neutral-100"}`}>
                 <p className="whitespace-pre-wrap">{m.text}</p>
-                {m.parts?.map((part, i) => <RenderedPart key={i} part={part} />)}
+                {m.parts?.map((part, i) =>
+                  isOptionBlocks(part) ? (
+                    <OptionBlocks key={i} blocks={part.blocks} disabled={busy} onConfirm={(text) => sendMessage.mutate({ text })} />
+                  ) : isApprovalCard(part) ? (
+                    <ApprovalCard key={i} card={part} disabled={busy} onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })} />
+                  ) : null,
+                )}
               </div>
             ))}
           </div>
@@ -71,12 +85,4 @@ export function Chat() {
       </div>
     </div>
   );
-}
-
-// Structural parts (option blocks, approval cards…) — added in later units (U26).
-// The placeholder keeps the renderer's shape without speculative UI.
-function RenderedPart({ part }: { part: unknown }) {
-  // structural parts arrive with later units (U26); keep an id for the key today
-  void part;
-  return null;
 }

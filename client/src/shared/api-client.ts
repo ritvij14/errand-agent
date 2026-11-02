@@ -40,5 +40,9 @@ export const api = {
   conversations: () => request<ConversationSummary[]>("/conversations", "GET"),
   createConversation: () => request<ConversationSummary>("/conversations", "POST", {}),
   conversation: (id: string) => request<{ conversation: ConversationSummary; messages: Message[]; busy: boolean }>(`/conversations/${id}`, "GET"),
-  sendMessage: (id: string, text: string, clientMessageId: string) => request<Reply>(`/conversations/${id}/messages`, "POST", { text, clientMessageId }),
+  /** `approvalId`: the card on screen, so a typed yes answers that card (§ 2.5.5 rule 1) */
+  sendMessage: (id: string, text: string, clientMessageId: string, approvalId?: string) =>
+    request<Reply>(`/conversations/${id}/messages`, "POST", { text, clientMessageId, approvalId }),
+  decideApproval: (approvalId: string, decision: "approve" | "decline") =>
+    request<Reply>(`/approvals/${approvalId}/decision`, "POST", { decision }),
 };

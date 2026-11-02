@@ -332,7 +332,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U26 Chat page booking UI
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `client/src/components/OptionBlocks.test.tsx` (accordion open/close, price + rating on the header, Confirm disabled until a slot is tapped, tap + Confirm sends the exact `pickText`, one selection at a time, disabled while pending), `ApprovalCard.test.tsx` (provider / slot / price from the part, Approve / Decline report the card's decision, disabled while pending), `screens/Chat.test.tsx` (what reaches the API: pick without a card id, typed yes with the shown card id, Approve → decision; all four buttons disabled while a decision is pending). Server: slots carry `label`, cards carry `slotLabel`. Client 17/17, server 219/219, `npm run build -w client` ok. QA `/tmp/verify-U26/drive.txt`: through `:5173/api` — pickText → card with `slotLabel`, typed "yes" + `approvalId` → "Booked:", approval `used via typed`. Verify map started: `.pi/skills/verify/features/booking.md`.
 - **Depends on.** U14, U21.
 - **Covers.** FR-9 page, FR-10 page, § 2.4 chat page.
 - **Build.** Option blocks as accordions with slot buttons; tap selects, Confirm auto-sends "Book {provider} on {day} at {time}" as a chat message (ADR-007). An approval card drawn from the part with Approve and Decline. Approve and Send are disabled while a reply is pending. The typed yes carries the shown card id.

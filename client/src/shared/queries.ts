@@ -20,14 +20,25 @@ export const useCreateConversation = () => {
   });
 };
 
+const refreshConversation = (client: ReturnType<typeof useQueryClient>, id: string) => {
+  client.invalidateQueries({ queryKey: ["conversation", id] });
+  client.invalidateQueries({ queryKey: ["conversations"] });
+};
+
 export const useSendMessage = (id: string) => {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (text: string) => api.sendMessage(id, text, randomUUID()),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["conversation", id] });
-      client.invalidateQueries({ queryKey: ["conversations"] });
-    },
+    mutationFn: ({ text, approvalId }: { text: string; approvalId?: string }) => api.sendMessage(id, text, randomUUID(), approvalId),
+    onSuccess: () => refreshConversation(client, id),
+  });
+};
+
+/** The Approve / Decline buttons (§ 2.5.5): a run of its own, so the conversation reloads after. */
+export const useDecideApproval = (conversationId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ approvalId, decision }: { approvalId: string; decision: "approve" | "decline" }) => api.decideApproval(approvalId, decision),
+    onSuccess: () => refreshConversation(client, conversationId),
   });
 };
 
