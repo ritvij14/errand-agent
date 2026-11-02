@@ -340,12 +340,12 @@ Each finding's design change, in `docs/system-design.md` unless noted, and the p
 | R3 | One `in_flight` operation per booking (DB); re-check the booking before cancel / reschedule executes | 2.5.5 The check (Gate-2 re-check); schema operation.booking_id + unique index | U28 · booking changed elsewhere → approval voided, no call; eval R3-cross-conversation |
 | R4 | `list_bookings` returns `price` + `area` (written reading of the fixed contract) | 2.5.4 list_bookings row; schema mock_booking.area | U07 · returned fields; U19/U28/U29 · approval cards carry price, search by area |
 | R5 | Failure wording derived from the operation's checked status; caps name the concrete next step | 2.5.3 run-end table (cap rows, unknown_error, retries_exhausted) | U25 · wording matches checked status; evals 21a–21d |
-| R6 | Memory-sourced workflow facts keep the fact id and are re-checked at run start | (U03) 2.5.2 / 2.5.8 | U03 · doc; U32 · forget stops use in an open workflow; eval 19 |
+| R6 | Memory-sourced workflow facts keep the fact id and are re-checked at run start | (U03, done) 2.5.2 / 2.5.8 | U03 · doc; U32 · forget stops use in an open workflow; eval 19 |
 | R7 | Provider commits booking + idempotency result atomically; key change is one transaction | 2.5.6 provider-side atomicity + key-change transaction; schema mock tables | U08 · fault between writes leaves neither; U22 · key-change atomicity |
-| R8 | Calendar clock (slots, holds) vs injected elapsed timer (run deadline); awaited work raced | (U03) 2.5.3 caps | U03 · doc; U04 · two clocks; U25 · real delayed op stops at deadline; eval 21c |
-| R9 | Decline by intent; one explicit pending question; partial time correction merges | (U03) 2.5.2 + 2.5.5 | U03 · doc; U16 · merge rows; U20/U30 · decline transitions |
-| R10 | Cap scenarios split into deterministic cases; retry exhaustion separate; I-1 scoped; hold-expiry timing explicit | (U03) 2.5.10 + caps | U25 · evals 21a–21d; U17 · I-1 scope (U03 doc) |
-| R11 | Milliseconds everywhere; `npm test` = Vitest + evals; artifact paths fixed | (U03) schema/api-contracts + AGENTS.md 2 and 6 | U03 · docs; U05 · ms timestamps; U13 · root test runs evals |
-| R12 + § 4 | Submission checklist + bugs log; 100× note goes in the design note | (U03) new docs/submission-checklist.md, docs/bugs.md | U37–U40 · artifacts exist with acceptance checks |
+| R8 | Calendar clock (slots, holds) vs injected elapsed timer (run deadline); awaited work raced | (U03, done) 2.5.3 caps | U03 · doc; U04 · two clocks; U25 · real delayed op stops at deadline; eval 21c |
+| R9 | Decline by intent; one explicit pending question; partial time correction merges | (U03, done) 2.5.2 + 2.5.5 | U03 · doc; U16 · merge rows; U20/U30 · decline transitions |
+| R10 | Cap scenarios split into deterministic cases; retry exhaustion separate; I-1 scoped; hold-expiry timing explicit | (U03, done) 2.5.10 + caps | U25 · evals 21a–21d; U17 · I-1 scope (U03 doc) |
+| R11 | Milliseconds everywhere; `npm test` = Vitest + evals; artifact paths fixed | (U03, done) schema/api-contracts + AGENTS.md 2 and 6 | U03 · docs; U05 · ms timestamps; U13 · root test runs evals |
+| R12 + § 4 | Submission checklist + bugs log; 100× note goes in the design note | (U03, done) new docs/submission-checklist.md, docs/bugs.md | U37–U40 · artifacts exist with acceptance checks |
 
 R6 and R8–R11 + R12 are folded into the design by U03 (docs), and built and proven by the units named above.
