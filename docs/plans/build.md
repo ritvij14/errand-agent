@@ -240,7 +240,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 - [x] Done. Evidence: `agent/options.test.ts` (6 unit), `agent/search.flow.test.ts` (6 flow), regression tests for B1–B3 (`docs/bugs.md`); suite 144/144, evals 3/3. QA `/tmp/verify-U18/drive.txt` on the real clock: full request → 3 numbered blocks (≤₹1,500, mornings, from tomorrow), ₹100 → `NO_MATCHES` naming the budget and the cheapest price, ₹2,000 → re-search with 4 blocks; one `search_providers` tool call per run in the trace.
 - **Depends on.** U15, U17.
 - **Covers.** FR-9, § 2.5.2 `searching` and `choosing`, rule 2 cascade, `NO_MATCHES`.
-- **Build.** `searching` calls `search_providers` through the gateway. Filter by budget, time window and preferences. Option blocks part grouped by provider, providers ordered by earliest slot, numbered 1…n with slots lettered a, b, c. `NO_MATCHES` names the filter that removed everything. A correction after options redoes the search.
+- **Build.** `searching` calls `search_providers` through the gateway. Filter by budget, time window and preferences. Option blocks part grouped by provider, providers ordered by earliest slot (numbers/letters later dropped by ADR-007). `NO_MATCHES` names the filter that removed everything. A correction after options redoes the search.
 - **Tests.** Grouping and ordering. Budget filter. `NO_MATCHES` names the right filter. Correcting the budget keeps service, area and time.
 - **Evals.** 3.
 - **QA.** API drive: "plumber in HSR Layout this week, mornings only, under ₹1,500" returns an option-blocks part.
@@ -252,7 +252,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 - [ ] Done. Evidence:
 - **Depends on.** U18.
 - **Covers.** FR-9 picking, FR-10 (card), § 2.5.5 approval record and creation, V-2.
-- **Build.** `POST /api/conversations/:id/picks`. Typed "2b" or provider name plus time. "the second one" alone asks which, and with no list it is `NOTHING_TO_PICK`. `holding` calls `hold_slot`, and `slot_unavailable` goes back to `choosing`. `server/src/approval` creates a `pending` record from state, never from model text. The approval-card part is drawn from the record and shows the quoted price.
+- **Build.** A pick is a normal message (ADR-007): provider name plus day and time, matched against the shown candidates. Options carry every matching slot, no numbers or letters. "the second one" alone asks which, and with no list it is `NOTHING_TO_PICK`. `holding` calls `hold_slot`, and `slot_unavailable` goes back to `choosing`. `server/src/approval` creates a `pending` record from state, never from model text. The approval-card part is drawn from the record and shows the quoted price.
 - **Tests.** Pick parsing. Hold failure goes back to options. The card's fields equal the record's fields. The card shows the quoted price when it differs from the search price.
 - **Evals.** 5.
 - **QA.** API drive through a pick to a card. Compare the card part with the approval row in `sqlite3`.
@@ -335,8 +335,8 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 - [ ] Done. Evidence:
 - **Depends on.** U14, U21.
 - **Covers.** FR-9 page, FR-10 page, § 2.4 chat page.
-- **Build.** Option blocks as accordions with slot buttons that send a pick. An approval card drawn from the part with Approve and Decline. Approve and Send are disabled while a reply is pending. The typed yes carries the shown card id.
-- **Tests.** RTL: accordion open and close, slot button sends the exact provider and slot, card shows the part's provider, slot and price, buttons disabled while pending.
+- **Build.** Option blocks as accordions with slot buttons; tap selects, Confirm auto-sends "Book {provider} on {day} at {time}" as a chat message (ADR-007). An approval card drawn from the part with Approve and Decline. Approve and Send are disabled while a reply is pending. The typed yes carries the shown card id.
+- **Tests.** RTL: accordion open and close, tap + Confirm sends the exact pick message, Confirm disabled until a slot is tapped, card shows the part's provider, slot and price, buttons disabled while pending.
 - **QA.** `npm run build -w client`. API drive of the same path through `:5173/api`.
 - **You see.** Client tests green for blocks and cards.
 - **Docs.** `docs/features/web-frontend.md`, `.pi/skills/verify/features/booking.md`.

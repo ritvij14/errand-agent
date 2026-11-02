@@ -334,7 +334,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const count = options.blocks.length;
     return {
       phase: "choosing",
-      reply: `I found ${count} option${count === 1 ? "" : "s"} for ${what}. Pick a provider and slot — for example "1a".`,
+      reply: `I found ${count} option${count === 1 ? "" : "s"} for ${what}. Tap a slot and press Confirm, or tell me the provider and time.`,
       facts: saved.workflow.facts,
       parts: [{ type: "option_blocks", blocks: saved.workflow.candidates as OptionBlock[] }],
     };

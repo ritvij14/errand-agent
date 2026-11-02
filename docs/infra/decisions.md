@@ -214,3 +214,33 @@ A UI bug slips past component tests and is found in the manual pass — then add
 ---
 
 <!-- Add new ADRs below as decisions are made -->
+### ADR-007: A slot pick is a chat message the page sends for the user (tap + Confirm), not a numbered/lettered code or its own endpoint
+
+**Date:** 2026-11-02
+**Status:** Active
+
+**Decision:**
+Option blocks show one block per provider with **every** matching slot as a plain button — no provider numbers, no slot letters. The user taps a slot, presses **Confirm**, and the page sends an ordinary chat message naming the exact choice: `Book {provider name} on {Ddd D Mon} at {HH:MM}`. The server reads it like any typed pick (provider name + day + time) and matches it against the saved candidates. There is no `POST /api/conversations/:id/picks` endpoint; a pick is a `message` run.
+
+**Context:**
+FR-9 asked for "all matching slots, lettered a, b, c". The mock world gives a provider up to ~4 slots a day — up to 56 in the 14-day window — so single letters run out after z; U18 had capped blocks at 8 slots to keep letters single, which broke "all". Operator proposed the tap-and-confirm pattern (like Claude's Q&A picker: choices are selected, the result is an auto-sent message) on 2026-11-02.
+
+**Options considered:**
+
+- **Tap + Confirm sends a chat message ([chosen])** — all slots shown; one pick path for clicks and typing; the transcript reads naturally
+- **Letters a…z then aa, ab** — keeps FR-9's codes, but "2ab" is awkward to type and read
+- **Keep the 8 earliest per provider** — short blocks, but hides options and contradicts FR-9
+- **Letters restart per day ("1 Wed b")** — all slots, but a three-part code to parse
+
+**Reasoning:**
+One input path (a message) means one parser, one run kind and one set of tests; the click path just produces a message the parser is guaranteed to read. Confirm guards against mis-taps before anything is held.
+
+**Tradeoffs accepted:**
+
+- Typed "2b"-style picks are no longer supported; users type the provider name and time instead
+- The run `trigger` CHECK list still allows `'pick'` (migration 004 is already applied); it is simply never used
+
+**Revisit when:**
+A live LLM reads messages (phase 3) and could mangle the auto-sent pick — then send the pick with structured ids alongside the text.
+
+---

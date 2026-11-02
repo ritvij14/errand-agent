@@ -64,7 +64,7 @@ Structured pieces of an agent message. Always built from saved state, never from
 
 | `type`             | Fields                                                                                       | Shown as                                                                                              |
 | ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `option_blocks`    | `blocks: [{ number, provider: { id, name, rating, price }, slots: [{ letter, start }] }]`    | Provider blocks numbered 1…n (earliest slot first), slots lettered a, b, c…, at most 8 per provider, in an accordion (FR-9). Each slot is a button. |
+| `option_blocks`    | `blocks: [{ provider: { id, name, rating, price }, slots: [{ start }] }]`                    | One block per provider (earliest slot first), **every** matching slot, in an accordion (FR-9). Slots are tap buttons; Confirm sends a chat message naming provider + slot (ADR-007). |
 | `approval_card`    | `approvalId, action, provider: { id, name }, slot, price, bookingId?, status`                | Card with Approve / Decline (FR-10)                                                                   |
 | `provider_details` | `provider: { id, name, rating, price, attributes }, reviews: [{ text, suspectedInjection }]` | Details + "Reviews (from the provider, not checked)", with ⚠ badges (`docs/system-design.md` § 2.5.7) |
 | `bookings_list`    | `bookings: [{ id, provider: { id, name }, service, slot, status }]`                          | List of the user's bookings (FR-5)                                                                    |
@@ -144,11 +144,7 @@ Starts a run with trigger `message`.
 | `CONVERSATION_BUSY` | 409  | A run is already in progress for this conversation |
 | `NOT_FOUND`         | 404  | Not this user's conversation                       |
 
-#### `POST /api/conversations/:id/picks`
-
-Starts a run when the user **clicks a slot button** — the exact choice, no reading needed.
-**Body:** `{ "providerId": "uuid", "slot": "ISO 8601", "clientMessageId": "uuid" }`
-**Response `200`:** `{ "data": Reply }` · errors as for messages. A pick that isn't among the options currently shown → the run replies with `NOTHING_TO_PICK`.
+_Picking a slot has no endpoint of its own (ADR-007): the page sends the pick as a normal message — "Book {provider name} on {Ddd D Mon} at {HH:MM}" — through `POST /api/conversations/:id/messages`. A pick that doesn't match the options shown → `NOTHING_TO_PICK`._
 
 ---
 

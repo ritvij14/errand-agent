@@ -15,7 +15,7 @@ const at = (day: string, hhmm: string) => `2026-11-${day}T${hhmm}:00+05:30`;
 const anyTime: TimeWindow = { dateFrom: null, dateTo: null, earliest: null, latest: null };
 
 describe("option blocks (FR-9)", () => {
-  it("groups slots by provider, orders providers by earliest slot, numbers 1…n and letters a, b, c", () => {
+  it("groups slots by provider and orders providers by their earliest slot, slots earliest first", () => {
     const result = buildOptions(
       [
         provider("late", 900, [at("05", "10:00")]),
@@ -27,20 +27,23 @@ describe("option blocks (FR-9)", () => {
       ok: true,
       blocks: [
         {
-          number: 1,
           provider: { id: "early", name: "Provider early", rating: 4.5, price: 900 },
-          slots: [
-            { letter: "a", start: at("03", "09:00") },
-            { letter: "b", start: at("03", "14:00") },
-          ],
+          slots: [{ start: at("03", "09:00") }, { start: at("03", "14:00") }],
         },
         {
-          number: 2,
           provider: { id: "late", name: "Provider late", rating: 4.5, price: 900 },
-          slots: [{ letter: "a", start: at("05", "10:00") }],
+          slots: [{ start: at("05", "10:00") }],
         },
       ],
     });
+  });
+
+  it("shows every matching slot, however many (ADR-007: no letters to run out)", () => {
+    const many = [...Array(40).keys()].map((i) =>
+      at(String(3 + Math.floor(i / 4)).padStart(2, "0"), `${String(8 + (i % 4)).padStart(2, "0")}:00`),
+    );
+    const result = buildOptions([provider("p", 900, many)], { timeWindow: anyTime, budget: undefined });
+    expect(result.ok && result.blocks[0]!.slots).toHaveLength(40);
   });
 
   it("drops providers over budget; 'any' budget keeps everyone", () => {

@@ -5,19 +5,16 @@ import type { TimeWindow } from "./time-window.js";
 // Search results → option blocks (FR-9, § 2.5.2 `searching`). Pure: the workflow
 // stores the blocks as candidates and the reply part is drawn from them.
 
+// No numbers or letters (ADR-007): a pick names the provider and the slot's time.
 export type OptionBlock = {
-  number: number;
   provider: { id: string; name: string; rating: number; price: number };
-  slots: { letter: string; start: string }[];
+  slots: { start: string }[];
 };
 
 export type OptionsResult =
   | { ok: true; blocks: OptionBlock[] }
   | { ok: false; error: "NO_MATCHES"; filter: "time" }
   | { ok: false; error: "NO_MATCHES"; filter: "budget"; cheapest: number };
-
-/** @remarks Letters run a…z, so a block shows at most this many (earliest first). */
-export const MAX_SLOTS_PER_PROVIDER = 8;
 
 // Slots carry their IST offset ("2026-11-03T09:00:00+05:30"), so HH:MM is local time.
 const localTime = (slot: string): string => slot.slice(11, 16);
@@ -58,12 +55,9 @@ export const buildOptions = (
   );
   return {
     ok: true,
-    blocks: ordered.map((x, i) => ({
-      number: i + 1,
+    blocks: ordered.map((x) => ({
       provider: { id: x.p.id, name: x.p.name, rating: x.p.rating, price: x.p.price },
-      slots: x.slots
-        .slice(0, MAX_SLOTS_PER_PROVIDER)
-        .map((start, j) => ({ letter: String.fromCharCode(97 + j), start })),
+      slots: x.slots.map((start) => ({ start })),
     })),
   };
 };

@@ -39,21 +39,19 @@ const blocksOf = (reply: { message: { parts: Record<string, unknown>[] } }): Opt
   reply.message.parts.find((p) => p.type === "option_blocks")?.blocks as OptionBlock[] | undefined;
 
 describe("search and option blocks", () => {
-  it("a complete request returns numbered provider blocks that respect budget and time, and waits in choosing", async () => {
+  it("a complete request returns provider blocks that respect budget and time, and waits in choosing", async () => {
     const { testDb, say, workflow } = setup();
     const reply = await say("plumber in HSR Layout this week, mornings only, under ₹1,500");
     const blocks = blocksOf(reply);
     expect(blocks?.length).toBeGreaterThan(0);
-    expect(blocks!.map((b) => b.number)).toEqual(blocks!.map((_, i) => i + 1));
     for (const block of blocks!) {
       expect(block.provider.price).toBeLessThanOrEqual(1500);
-      expect(block.slots[0]!.letter).toBe("a");
       for (const slot of block.slots) {
         expect(slot.start.slice(0, 10) >= "2026-11-02" && slot.start.slice(0, 10) <= "2026-11-08").toBe(true);
         expect(slot.start.slice(11, 16) < "12:00").toBe(true);
       }
     }
-    expect(reply.message.text).toMatch(/1a/);
+    expect(reply.message.text).toMatch(/tap a slot/i);
     expect(workflow().phase).toBe("choosing");
     const events = readTrace(testDb.db, reply.runId);
     expect(
