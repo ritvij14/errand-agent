@@ -15,7 +15,7 @@ An in-process mock of the brief's fixed provider-tool contract: 5 services, 5 Be
 | `tools/read-tools.ts`   | `searchProviders`, `getProvider`, `listBookings`                  |
 | `tools/write-tools.ts`  | `holdSlot`, `book`, `getBookingStatus`, `cancel`, `reschedule` (U08, U09) |
 | `tools/settings.ts`     | App vs eval settings: seed, probabilities, pauses (U08)           |
-| `tools/tool-gateway.ts` | The only way the agent reaches the tools (U15)                    |
+| `tools/tool-gateway.ts` | The only way the agent reaches the tools — one object per run bound to userId + trace + tool budget. Caps: > 10 calls (or already used) → refused `CAP_TOOL_CALLS` without a call. Shape checks → `PROVIDER_BAD_RESPONSE`. get_provider's reviews cut to 500 chars + `suspectedInjection` per review and on the trace event. `book` / `cancel` / `reschedule` fail closed with `UNAUTHORIZED_WRITE` until U21 (R1, MH-2) |
 
 ## Contract readings worth remembering
 

@@ -201,7 +201,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U15 Tool gateway
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 8 gateway tests red→green (`server/src/tools/tool-gateway.test.ts`; suite 94/94, lint+tsc clean). Cornerstone test: `book` refused `UNAUTHORIZED_WRITE` even with a live hold. QA: no HTTP surface yet — the gateway suite is the proof.
 - **Depends on.** U09, U11.
 - **Covers.** § 2.5.4 tool gateway, § 2.5.7 rules 5, 7 and 8 and the warning label, V-7, R1 (fail closed).
 - **Build.** `server/src/tools` gateway with the 8 methods bound to the signed-in user. One attempt per call. Counts against the run's tool budget. Records a `tool_call` trace event. Checks result shape, so a bad shape becomes `PROVIDER_BAD_RESPONSE`. Wraps provider strings as untrusted and flags suspected injection. `book`, `cancel` and `reschedule` fail closed until U21 adds the execution check.
