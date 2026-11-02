@@ -43,7 +43,7 @@ COMPULSORY TASK - Always be clear on the major release of the tech stack being u
 - Primary store: SQLite via better-sqlite3 13 — https://github.com/WiseLibs/better-sqlite3 (upgrade path decided later only if needed)
 - Search: None
 - Cache: None
-- File storage: None (traces/artifacts storage decided at scaffold)
+- File storage: None — traces export to `traces/<run id>.json` on demand (git-ignored); the eval table is committed at `docs/evals/eval-table.md` (R11)
 
 **Infrastructure:**
 
@@ -251,7 +251,7 @@ npm test
 **Key scripts (all run from the repo root unless noted):**
 
 - `npm run dev` — starts Express (tsx watch) and the Vite dev server concurrently
-- `npm test` — server workspace test suite (Vitest); `npm run test:watch` for watch mode
+- `npm test` — Vitest first (unit + integration), then the eval runner; fails if either fails (R11). `npm run test:watch` for watch-mode Vitest; `npm run evals` for the eval suite alone
 - `npm run lint` / `npm run format` — ESLint / Prettier across the repo
 - `npm run build` — compiles the server (`tsc`, emits `server/dist`) and builds the client (`vite build`)
 - `npm run typecheck -w server` / same in `client/` — TypeScript-only sanity check
