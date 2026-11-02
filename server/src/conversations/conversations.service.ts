@@ -123,6 +123,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
         model: countedModel,
         search: gateway.searchProviders,
         hold: gateway.holdSlot,
+        list: gateway.listBookings,
         book: {
           book: gateway.book,
           status: gateway.getBookingStatus,

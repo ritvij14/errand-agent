@@ -39,3 +39,10 @@
 - The reader checks decisions first: a **plain** yes / no (whole message) is a decision; a decision word followed by more words is read as a change from the rest of the message (`readDecisionWithChange`: time → a merging time correction, budget → a budget correction, anything unreadable → `unknown`, never an approval). This is why "not this one" declines instead of being taken as a vague pick.
 - In `awaiting_approval` the store routes decisions to `decideOn` (see `docs/features/approval-gate.md`) and re-shows the card for anything unclear. Any fact change voids the open approval first (`user_correction`); a drop voids it (`user_dropped`).
 - The conversation runner's `runTurn` is shared by message runs (2 model calls) and `approval_decision` runs (1 model call — the write; no read).
+
+## List my bookings and user isolation (U27, FR-5, V-7, I-10)
+
+- **Reading:** "show / list / see / view / what are … bookings" or "my bookings" → `{ kind: "list_bookings" }` (`agent/model.ts` `LIST_BOOKINGS_RE`, checked after plain decisions, before picks). Whose bookings is never read from the text — "show bob's bookings" is the same request as "show my bookings".
+- **Answering** (`workflow.ts` `listMyBookings`): one `list_bookings` call through the run's gateway (`RunTools.list`, bound to the signed-in user), reply "You have N bookings — upcoming and past are below." / "You have no bookings yet.", and a `bookings_list` part `{ id, providerName, service, area, slot, slotLabel, price, status }` (`status` is `completed` for a past `booked` slot, from the mock). It's a side question: the request in progress (any phase) is left exactly where it was.
+- **I-10** (eval runner `checkIsolation`): no run's tool calls or agent reply contains a booking id that belongs to another user. Eval 23 runs as **bob** (scenario `user` field) asking for alice's bookings; a negative test proves the check fires. Cancel isolation at the tool layer (another user's booking → `not_found`) is tested in `tools/cancel-reschedule.test.ts`; the agent's cancel flow is U28.
+

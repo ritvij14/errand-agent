@@ -4,7 +4,7 @@ import type { Clock } from "../shared/clock.js";
 import type { AgentModel, ReadResult } from "./index.js";
 import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
 import type { Trace } from "../tracing/index.js";
-import type { ProviderSummary, ToolResult } from "../tools/index.js";
+import type { BookingRecord, ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, searchRange, slotLabel, type OptionBlock } from "./options.js";
 import {
   executeBook,
@@ -75,8 +75,18 @@ export type HoldTool = (
   args: Selection,
 ) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
 
+/** `list_bookings` through the run's gateway — bound to the signed-in user (V-7). */
+export type ListTool = () => ToolResult<{ bookings: BookingRecord[] }>;
+
 /** What the run applying a message lends the store: its trace (MH-7) and its tools. */
-export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool; book?: BookTools; model?: AgentModel };
+export type RunTools = {
+  trace?: Trace;
+  search?: SearchTool;
+  hold?: HoldTool;
+  list?: ListTool;
+  book?: BookTools;
+  model?: AgentModel;
+};
 
 const REQUIRED = ["service", "area", "time_window"] as const;
 
@@ -149,6 +159,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   let trace: Trace | undefined;
   let search: SearchTool | undefined;
   let hold: HoldTool | undefined;
+  let list: ListTool | undefined;
   let bookTools: BookTools | undefined;
   /** the run's counted model (caps, NFR-1); the store's own model outside a run */
   let runModel: AgentModel | undefined;
@@ -272,6 +283,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       trace = run?.trace;
       search = run?.search;
       hold = run?.hold;
+      list = run?.list;
       bookTools = run?.book;
       runModel = run?.model;
     },
@@ -290,6 +302,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       let read: ReadResult = await (runModel ?? model).read(readJob);
       // an unusable read is read again; the model-call cap stops a model that never gives one
       while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
+
+      if (read.kind === "list_bookings") return listMyBookings(active);
 
       if (read.kind === "pick" || read.kind === "pick_unclear") {
         if (!active || !shown?.length) {
@@ -899,6 +913,31 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       reply: `Booked: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${outcome.bookingId}.`,
       facts,
     };
+  }
+
+  /**
+   * FR-5: a side question — answered from `list_bookings` (whose user is the signed-in
+   * one, never a name in the text, V-7) without touching the request in progress.
+   */
+  function listMyBookings(active: WorkflowRow | undefined): ApplyOutcome {
+    const phase = active?.phase ?? "none";
+    const facts = active?.facts ?? ({} as Facts);
+    const result = list!();
+    if (!result.ok) return { phase, reply: "I couldn't read your bookings just now — please ask again.", facts, code: result.error };
+    const bookings = result.data.bookings.map((b) => ({
+      id: b.id,
+      providerName: b.providerName,
+      service: b.service,
+      area: b.area,
+      slot: b.slot,
+      slotLabel: slotLabel(b.slot),
+      price: b.price,
+      status: b.status,
+    }));
+    const reply = bookings.length
+      ? `You have ${bookings.length} booking${bookings.length === 1 ? "" : "s"} — upcoming and past are below.`
+      : "You have no bookings yet.";
+    return { phase, reply, facts, parts: [{ type: "bookings_list", bookings }] };
   }
 
   /** The provider has the booking though the run never finished it: record it and report it. */

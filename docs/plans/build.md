@@ -345,7 +345,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U27 List my bookings and user isolation
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/bookings-list.flow.test.ts` (lists the signed-in user's bookings past + upcoming via one `list_bookings`; alice naming bob sees only hers, bob's id never in the reply; bob sees only his; no bookings → told so; asked mid-request, the request stays in `choosing`), `evals/runner.test.ts` (I-10 fires on a leaked id; eval 23 runs as bob), `client/src/components/BookingsList.test.tsx`. Cancel isolation at the tool: `tools/cancel-reschedule.test.ts` (another user's booking → `not_found`). Suite 226/226, client 19/19, evals 21/21 with I-10 on. QA `/tmp/verify-U27/drive.txt`: as alice and bob through `:5173/api` — each sees only their own bookings whatever name they type; bob reading alice's conversation → 404.
 - **Depends on.** U15, U17.
 - **Covers.** FR-5, V-7, I-10.
 - **Build.** "Show my bookings" intent returning a bookings-list part through the bound gateway. Naming another user changes nothing.

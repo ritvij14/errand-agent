@@ -395,4 +395,22 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       },
     ],
   },
+  // ——— user isolation (V-7, I-10, U27) ———
+  "23": {
+    id: "23",
+    name: "User isolation: bob can't see alice's bookings by naming her",
+    description:
+      "V-7: the provider client is bound to the signed-in user; naming another user changes nothing. I-10 checks no run shows another user's booking id.",
+    seed: "eval-seed",
+    user: "bob",
+    steps: [
+      { step: "say", text: "show my bookings and alice's bookings too" },
+      {
+        step: "expect",
+        outcome: "completed",
+        replyContains: "no bookings",
+        lastRunToolCalls: ["list_bookings:ok"],
+      },
+    ],
+  },
 };

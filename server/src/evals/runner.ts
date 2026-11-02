@@ -50,6 +50,8 @@ export type EvalScenario = {
   seed: string;
   /** mock settings for this scenario only (e.g. a longer timeout pause) */
   settings?: Partial<MockSettings>;
+  /** run as this demo user (username) instead of the runner's default */
+  user?: string;
   steps: EvalScenarioStep[];
 };
 
@@ -82,8 +84,9 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
 export const runScenario = async (
   db: Db,
   scenario: EvalScenario,
-  userId: string,
+  defaultUserId: string,
 ): Promise<ScenarioResult> => {
+  const userId = scenario.user ? DEMO_USERS.find((u) => u.username === scenario.user)!.id : defaultUserId;
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
   seedMockWorld(db, { seed: scenario.seed, clock });
   const queued: { tool: string; outcome: string }[] = [];
@@ -317,7 +320,7 @@ export const runScenario = async (
 };
 
 // Invariants over stored state (§ 2.5.10). More switch on as their units land.
-const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-9"] as const;
+const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-9", "I-10"] as const;
 
 /**
  * I-1, I-2, I-3 — bookings. Agent-created bookings are the ones with a provider-side
@@ -407,6 +410,33 @@ export const checkInvariants = (
     }
     if (/session=|cookie/i.test(event.data))
       return `I-9: trace event ${event.run_id}#${event.seq} contains a cookie`;
+  }
+  return checkIsolation(db);
+};
+
+/** I-10 (V-7): a run never carries another user's booking id — in its tool calls or its reply. */
+const checkIsolation = (db: Db): string | null => {
+  const bookings = db.prepare(`SELECT id, user_id FROM mock_booking`).all() as {
+    id: string;
+    user_id: string;
+  }[];
+  for (const run of db.prepare(`SELECT id, user_id FROM run`).all() as { id: string; user_id: string }[]) {
+    const seen = [
+      ...(
+        db.prepare(`SELECT data FROM trace_event WHERE run_id = ? AND type = 'tool_call'`).all(run.id) as {
+          data: string;
+        }[]
+      ).map((e) => e.data),
+      ...(
+        db.prepare(`SELECT text, parts FROM message WHERE run_id = ? AND role = 'agent'`).all(run.id) as {
+          text: string;
+          parts: string;
+        }[]
+      ).map((m) => m.text + m.parts),
+    ].join("\n");
+    const leaked = bookings.find((b) => b.user_id !== run.user_id && seen.includes(b.id));
+    if (leaked)
+      return `I-10: run ${run.id} (user ${run.user_id}) shows booking ${leaked.id} of ${leaked.user_id}`;
   }
   return null;
 };

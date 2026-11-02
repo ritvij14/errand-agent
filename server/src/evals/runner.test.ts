@@ -96,4 +96,29 @@ describe("booking invariants catch what they claim to (§ 2.5.10)", () => {
     expect(checkInvariants(w.testDb.db, { modelCalls: 6, toolCalls: 10, elapsedMs: 60_000 })).toMatch(/^I-3/);
     w.testDb.close();
   });
+
+  it("I-10: another user's booking id in a run's tool results or reply is reported", async () => {
+    const w = evalWorld();
+    const result = await runScenario(w.testDb.db, SCENARIOS["E0"]!, "u-demo-bob");
+    expect(result.pass).toBe(true);
+    // alice's seeded booking leaking into bob's reply
+    w.testDb.db
+      .prepare(
+        `UPDATE message SET parts = '[{"type":"bookings_list","bookings":[{"id":"mb-demo-ac"}]}]' WHERE role = 'agent'`,
+      )
+      .run();
+    expect(checkInvariants(w.testDb.db, { modelCalls: 6, toolCalls: 10, elapsedMs: 60_000 })).toMatch(
+      /^I-10/,
+    );
+    w.testDb.close();
+  });
+
+  it("eval 23 runs as the scenario's user, so isolation is checked from bob's side", async () => {
+    const w = evalWorld();
+    const result = await runScenario(w.testDb.db, SCENARIOS["23"]!, w.user);
+    expect(result.pass).toBe(true);
+    const runUsers = w.testDb.db.prepare(`SELECT DISTINCT user_id FROM run`).all() as { user_id: string }[];
+    expect(runUsers).toEqual([{ user_id: "u-demo-bob" }]);
+    w.testDb.close();
+  });
 });

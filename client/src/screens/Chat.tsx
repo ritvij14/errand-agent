@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useConversation, useConversations, useCreateConversation, useDecideApproval, useSendMessage, useSignOut } from "../shared/queries.js";
 import type { Message } from "../shared/api-client.js";
-import { isApprovalCard, isOptionBlocks } from "../shared/parts.js";
+import { isApprovalCard, isBookingsList, isOptionBlocks } from "../shared/parts.js";
 import { OptionBlocks } from "../components/OptionBlocks.js";
 import { ApprovalCard } from "../components/ApprovalCard.js";
+import { BookingsList } from "../components/BookingsList.js";
 
 // The chat page: conversation list + message view + composer (§ 2.4). Send is
 // disabled while a reply is pending (2.3: both sides block overlapping sends).
@@ -63,6 +64,8 @@ export function Chat() {
                     <OptionBlocks key={i} blocks={part.blocks} disabled={busy} onConfirm={(text) => sendMessage.mutate({ text })} />
                   ) : isApprovalCard(part) ? (
                     <ApprovalCard key={i} card={part} disabled={busy} onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })} />
+                  ) : isBookingsList(part) ? (
+                    <BookingsList key={i} part={part} />
                   ) : null,
                 )}
               </div>

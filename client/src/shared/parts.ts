@@ -19,6 +19,23 @@ export type ApprovalCardPart = {
   status: string;
 };
 
+export type BookingsListPart = {
+  type: "bookings_list";
+  bookings: {
+    id: string;
+    providerName: string;
+    service: string;
+    area: string;
+    slot: string;
+    slotLabel: string;
+    price: number;
+    status: string;
+  }[];
+};
+
+export const isBookingsList = (part: unknown): part is BookingsListPart =>
+  (part as { type?: string } | null)?.type === "bookings_list";
+
 export const isOptionBlocks = (part: unknown): part is OptionBlocksPart =>
   (part as { type?: string } | null)?.type === "option_blocks";
 
