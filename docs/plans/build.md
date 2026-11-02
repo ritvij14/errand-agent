@@ -444,7 +444,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U35 Trace panel and trace export
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `tracing/trace-routes.test.ts` (GET returns run + ordered events; another user 404; 401; exportTrace/writeTraceFile write exactly `run` + `events` to `traces/<run id>.json`; I-9 sweep over stored rows finds no password/cookie/session id/secret hash), `components/TracePanel.test.tsx` (ordered timeline coloured by type, expand/collapse shows the raw fields, outcome + call counts, quiet placeholder), Chat trace-link test (reply link switches the panel to that run). `npm run trace:export -- <run id>` + `traces/` git-ignored. Runner I-9 already on; sweep covers HTTP too (route tests). Suite 294/294, client 34/34, evals 30/30. QA `/tmp/verify-U35/drive.txt`: alice's 11-event trace, bob 404, `jq keys = events,run`, 0 secret hits.
 - **Depends on.** U26, U11.
 - **Covers.** MH-7, FR-13, § 2.5.9 viewing and exporting, deliverable 5 tooling, I-9.
 - **Build.** The trace panel loads the latest run after each reply, shows a timeline coloured by type, expands an event's fields, and switches runs via each reply's trace link. `npm run trace:export -- <run id>` writes `traces/<run id>.json`. The I-9 sweep covers HTTP flows as well as evals.

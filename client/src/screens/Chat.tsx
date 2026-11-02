@@ -11,9 +11,11 @@ import {
   useConfirmMemory,
   useRejectMemory,
   useForgetMemory,
+  useTrace,
 } from "../shared/queries.js";
 import type { Message } from "../shared/api-client.js";
 import { MemoryPanel } from "../components/MemoryPanel.js";
+import { TracePanel } from "../components/TracePanel.js";
 import { isApprovalCard, isBookingsList, isOptionBlocks, isProviderDetails } from "../shared/parts.js";
 import { OptionBlocks } from "../components/OptionBlocks.js";
 import { ApprovalCard } from "../components/ApprovalCard.js";
@@ -35,16 +37,20 @@ export function Chat() {
   const confirmMemory = useConfirmMemory();
   const rejectMemory = useRejectMemory();
   const forgetMemory = useForgetMemory();
+  // FR-13 (U35): the latest reply's run loads automatically; a reply's "trace" link switches the panel
+  const messages = conversation.data?.messages ?? [];
+  const latestRunId = messages.filter((m) => m.role === "agent" && m.runId).at(-1)?.runId ?? null;
+  const [traceRunId, setTraceRunId] = useState<string | null>(null); // explicit choice wins over latest
+  const shownRunId = traceRunId ?? latestRunId;
   const [draft, setDraft] = useState("");
   // 2.3: nothing new is sent — typed, tapped or clicked — while a reply is pending
   const busy = sendMessage.isPending || decide.isPending || create.isPending || signOut.isPending;
-  const messages = conversation.data?.messages ?? [];
   // the newest card on screen: a typed yes / no answers that card (§ 2.5.5 rule 1)
   const shownCardId = messages
     .flatMap((m) => m.parts ?? [])
     .filter(isApprovalCard)
     .at(-1)?.approvalId;
-
+  const trace = useTrace(shownRunId, shownRunId !== null);
   const send = () => {
     const text = draft.trim();
     if (!text || !selected || busy) return;
@@ -123,6 +129,15 @@ export function Chat() {
                     <ProviderDetails key={i} part={part} />
                   ) : null,
                 )}
+                {/* FR-13: each agent reply links to its own run's trace */}
+                {m.role === "agent" && m.runId && (
+                  <button
+                    className="mt-1 text-[10px] text-neutral-500 underline"
+                    onClick={() => setTraceRunId(m.runId ?? null)}
+                  >
+                    trace
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -144,6 +159,12 @@ export function Chat() {
             </button>
           </footer>
         </main>
+        <aside
+          aria-label="Trace panel"
+          className="w-64 shrink-0 overflow-y-auto rounded-lg border border-neutral-200 p-3"
+        >
+          <TracePanel trace={trace.data ?? null} />
+        </aside>
       </div>
     </div>
   );

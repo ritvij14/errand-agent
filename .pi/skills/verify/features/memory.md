@@ -25,3 +25,13 @@ As alice: conversation 1 "I live in HSR"; conversation 2 "book an electrician" (
 
 - Seeded eval bookings must be named `mb-demo-*` or I-1 reports them as agent-made.
 - `memory_fact.service` is only for `preferred_provider`; forgetting it without naming a service matches any.
+
+## Memory panel + API (U34)
+
+- Endpoints on `:5173/api` (as alice): `GET /api/memory`, `PUT /api/memory/:id {"value": "..."}`, `POST /api/memory/:id/confirm`, `POST /api/memory/:id/reject`, `DELETE /api/memory/:id`. Panel actions change memory directly — not runs, no traces.
+- Proof: PUT then a chat run ("book an electrician") uses the corrected area with the note; DELETE then a new conversation asks "which area and when?".
+- Another user's fact → 404 on every method. Bad values → 400.
+
+## Gotchas (panel)
+
+- The sign-in rate limiter is module-level — route tests must mint sessions with `createSession`, not sign in over HTTP repeatedly.

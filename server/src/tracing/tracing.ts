@@ -10,7 +10,18 @@ export const TRACE_EVENT_FIELDS: Record<string, string[]> = {
   model_call: ["job", "input", "output", "durationMs", "tokens", "cost", "notAvailable"],
   state_transition: ["fromPhase", "toPhase", "reason"],
   fact_changed: ["key", "oldValue", "newValue", "source", "isCorrection"],
-  tool_call: ["tool", "args", "attempt", "idempotencyKey", "ok", "errorCode", "transient", "result", "durationMs", "suspectedInjection"],
+  tool_call: [
+    "tool",
+    "args",
+    "attempt",
+    "idempotencyKey",
+    "ok",
+    "errorCode",
+    "transient",
+    "result",
+    "durationMs",
+    "suspectedInjection",
+  ],
   approval_event: ["event", "via", "action", "providerId", "slot", "price", "voidReason", "approvalId"],
   operation_event: ["event", "kind", "key", "result"],
   memory_event: ["event", "key", "value", "service"],
@@ -31,7 +42,9 @@ export type Trace = { record: (type: string, data: Record<string, unknown>, dura
 
 export const startTrace = (db: Db, clock: Clock, runId: string): Trace => {
   let seq = 0;
-  const insert = db.prepare(`INSERT INTO trace_event (run_id, seq, type, clock_at, duration_ms, data) VALUES (?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(
+    `INSERT INTO trace_event (run_id, seq, type, clock_at, duration_ms, data) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
   return {
     record: (type, data, durationMs) => {
       const allowed = TRACE_EVENT_FIELDS[type];
@@ -53,7 +66,9 @@ export const startTrace = (db: Db, clock: Clock, runId: string): Trace => {
 
 export const readTrace = (db: Db, runId: string): TraceEvent[] =>
   (
-    db.prepare(`SELECT seq, type, clock_at, duration_ms, data FROM trace_event WHERE run_id = ? ORDER BY seq`).all(runId) as {
+    db
+      .prepare(`SELECT seq, type, clock_at, duration_ms, data FROM trace_event WHERE run_id = ? ORDER BY seq`)
+      .all(runId) as {
       seq: number;
       type: string;
       clock_at: number;

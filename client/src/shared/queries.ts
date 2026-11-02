@@ -95,3 +95,14 @@ export const useEditMemory = () =>
 export const useConfirmMemory = () => useMemoryMutation<{ id: string }>(({ id }) => api.confirmMemory(id));
 export const useRejectMemory = () => useMemoryMutation<{ id: string }>(({ id }) => api.rejectMemory(id));
 export const useForgetMemory = () => useMemoryMutation<{ id: string }>(({ id }) => api.forgetMemory(id));
+
+// ——— trace panel (FR-13, U35) ———
+
+export const useTrace = (runId: string | null, enabled: boolean) =>
+  useQuery({
+    queryKey: ["trace", runId],
+    queryFn: () => api.trace(runId!),
+    enabled: enabled && runId !== null,
+    retry: false,
+    staleTime: 60_000, // a finished run's trace doesn't change
+  });

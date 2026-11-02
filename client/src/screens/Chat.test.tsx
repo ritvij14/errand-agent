@@ -14,6 +14,7 @@ vi.mock("../shared/api-client.js", () => ({
     decideApproval: vi.fn(),
     signOut: vi.fn(),
     memory: vi.fn(),
+    trace: vi.fn(),
   },
 }));
 
@@ -39,6 +40,7 @@ const MESSAGES = [
     id: "m2",
     role: "agent",
     text: "Here are the details — approve to book, or decline.",
+    runId: "r1",
     parts: [
       {
         type: "approval_card",
@@ -55,6 +57,10 @@ const MESSAGES = [
 ];
 
 const mocked = api as unknown as Record<keyof typeof api, ReturnType<typeof vi.fn>>;
+const TRACE_FIXTURE = {
+  run: { id: "r1", outcome: "completed", modelCalls: 2, toolCalls: 1 },
+  events: [{ seq: 1, type: "run_started", clockAt: 0, durationMs: null, data: { trigger: "message" } }],
+};
 const REPLY = {
   runId: "r1",
   outcome: "completed",
@@ -86,6 +92,16 @@ beforeEach(() => {
   mocked.conversation.mockResolvedValue({ conversation: { id: "c1" }, messages: MESSAGES, busy: false });
   mocked.sendMessage.mockResolvedValue(REPLY);
   mocked.decideApproval.mockResolvedValue(REPLY);
+  mocked.trace.mockResolvedValue(TRACE_FIXTURE);
+});
+
+describe("Chat — trace panel (FR-13, U35)", () => {
+  it("each agent reply has a trace link that switches the panel to that run", async () => {
+    const user = await openConversation();
+    await user.click(screen.getAllByRole("button", { name: "trace" }).at(-1)!);
+    await screen.findByText(/run_started/);
+    expect(mocked.trace).toHaveBeenCalledWith("r1");
+  });
 });
 
 describe("Chat — booking parts (FR-9, FR-10, ADR-007)", () => {

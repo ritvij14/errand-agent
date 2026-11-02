@@ -7,6 +7,7 @@ import { sendError, sendUnknownError } from "./shared/errors.js";
 import { createAuthRouter, verifyUser } from "./auth/index.js";
 import { createConversationsRouter } from "./conversations/index.js";
 import { createMemoryRouter } from "./memory/index.js";
+import { createTraceRouter } from "./tracing/index.js";
 
 export type AppDeps = { db: Db; clock: Clock; model: AgentModel };
 
@@ -17,8 +18,10 @@ const csrfGuard = (req: Request, res: Response, next: NextFunction): void => {
   if (req.method === "GET") return next();
   const site = req.headers["sec-fetch-site"];
   const type = (req.headers["content-type"] ?? "").split(";")[0];
-  if (site !== "same-origin") return sendError(res, "CSRF_REJECTED", "Missing or wrong Sec-Fetch-Site header");
-  if (type !== "application/json") return sendError(res, "CSRF_REJECTED", "Content-Type must be application/json");
+  if (site !== "same-origin")
+    return sendError(res, "CSRF_REJECTED", "Missing or wrong Sec-Fetch-Site header");
+  if (type !== "application/json")
+    return sendError(res, "CSRF_REJECTED", "Content-Type must be application/json");
   return next();
 };
 
@@ -37,6 +40,7 @@ export function createApp(deps: Partial<AppDeps> = {}) {
     app.use("/api", createAuthRouter({ db: deps.db, clock: deps.clock }));
     app.use("/api", createConversationsRouter({ db: deps.db, clock: deps.clock, model: deps.model }));
     app.use("/api", createMemoryRouter({ db: deps.db, clock: deps.clock }));
+    app.use("/api", createTraceRouter({ db: deps.db, clock: deps.clock }));
     // anything that mutates should know who is calling — future routers check verifyUser(deps.db, deps.clock, req)
     void verifyUser;
 
@@ -48,7 +52,10 @@ export function createApp(deps: Partial<AppDeps> = {}) {
         const known = err as { code: string; message: string; status?: number };
         return void res.status(known.status ?? 400).json({ error: known.message, code: known.code });
       }
-      if (err instanceof SyntaxError || (err && typeof err === "object" && (err as { type?: string }).type === "entity.parse.failed")) {
+      if (
+        err instanceof SyntaxError ||
+        (err && typeof err === "object" && (err as { type?: string }).type === "entity.parse.failed")
+      ) {
         return sendError(res, "VALIDATION_ERROR", "Request body must be valid JSON");
       }
       console.error(err);

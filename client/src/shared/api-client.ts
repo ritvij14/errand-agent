@@ -56,6 +56,26 @@ export type Reply = {
   outcome: string;
   message: { id: string; role: string; text: string; parts: unknown[] };
 };
+export type TraceEventView = {
+  seq: number;
+  type: string;
+  clockAt: number;
+  durationMs: number | null;
+  data: Record<string, unknown>;
+};
+export type TraceView = {
+  run: {
+    id: string;
+    conversationId: string;
+    trigger: string;
+    startedAt: number;
+    endedAt: number | null;
+    outcome: string | null;
+    modelCalls: number;
+    toolCalls: number;
+  };
+  events: TraceEventView[];
+};
 
 export const api = {
   me: () => request<Me>("/auth/me", "GET"),
@@ -82,4 +102,6 @@ export const api = {
   confirmMemory: (id: string) => request<MemoryFact>(`/memory/${id}/confirm`, "POST", {}),
   rejectMemory: (id: string) => request<MemoryFact>(`/memory/${id}/reject`, "POST", {}),
   forgetMemory: (id: string) => request<{ id: string; forgotten: boolean }>(`/memory/${id}`, "DELETE", {}),
+  // FR-13 (U35): one run's trace — 404 for another user's run
+  trace: (runId: string) => request<TraceView>(`/runs/${runId}/trace`, "GET"),
 };

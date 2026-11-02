@@ -10,3 +10,4 @@ One file per user-facing feature: what it is, how to drive it (HTTP through Vite
 | Drop / task switch | [task-switch.md](task-switch.md) |
 | Provider details / injection | [injection.md](injection.md) |
 | Stated memory | [memory.md](memory.md) |
+| Trace panel + export | [traces.md](traces.md) |
