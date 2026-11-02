@@ -60,4 +60,4 @@ Tear down only what this drive started (dev servers, any temp DB you created). N
 
 ## Feature map
 
-As features land, add one file per user-facing feature under `.agents/skills/verify/features/` (README index + one file per feature: what it is, how to drive it over HTTP and UI, the observable end state that proves it works, gotchas). The map is the QA checklist for the demo deliverable — keep it honest. If the app grows a feature this map cannot reach, that is drift: fix the map, report the gap; do not weaken a journey to make it pass.
+As features land, add one file per user-facing feature under `.pi/skills/verify/features/` (README index + one file per feature: what it is, how to drive it over HTTP and UI, the observable end state that proves it works, gotchas). The map is the QA checklist for the demo deliverable — keep it honest. If the app grows a feature this map cannot reach, that is drift: fix the map, report the gap; do not weaken a journey to make it pass.
