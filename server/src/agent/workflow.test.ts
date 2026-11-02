@@ -32,6 +32,14 @@ describe("collecting", () => {
     testDb.close();
   });
 
+  it("a request with every required detail in one message leaves collecting at once (regression)", async () => {
+    const { testDb, store } = fresh();
+    const outcome = await store.applyUserText(ALICE, "1", "plumber in HSR Layout this week");
+    expect(outcome.phase).toBe("searching");
+    expect(store.getActiveWorkflow("1")?.phase).toBe("searching");
+    testDb.close();
+  });
+
   it("never re-asks a known fact; answering the missing details ends collecting", async () => {
     const { testDb, store } = fresh();
     const first = await store.applyUserText(ALICE, "1", "I need a plumber");
@@ -111,7 +119,7 @@ describe("corrections cascade (rule 2)", () => {
 describe("tracing (MH-7)", () => {
   it("the run trace shows facts filling in and the move to searching", async () => {
     const { testDb, clock, store } = fresh();
-    store.useTrace(startTrace(testDb.db, clock, "run-t1"));
+    store.useRun({ trace: startTrace(testDb.db, clock, "run-t1") });
     await store.applyUserText(ALICE, "1", "I need a plumber");
     await store.applyUserText(ALICE, "1", "in HSR Layout this week");
     const events = readTrace(testDb.db, "run-t1");

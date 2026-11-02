@@ -42,6 +42,16 @@ describe("parseTimeWindow (V-6)", () => {
     expect(result.data.dateTo).toBe("2026-11-08");
   });
 
+  // regression: "now" used to be written into `earliest` for the whole range, so in the
+  // evening "this week, mornings only" became earliest 17:xx / latest 12:00 — every day empty
+  it("a multi-day window said in the evening keeps every day's mornings (no 'now' bound)", () => {
+    const evening = clockOf(new Date("2026-11-02T12:30:00Z")); // Mon 18:00 IST
+    const result = parseTimeWindow("this week, mornings only", evening);
+    expect(result).toEqual({ ok: true, data: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: null, latest: "12:00" } });
+    const after = parseTimeWindow("this week after 11", evening);
+    expect(after.ok && after.data.dateFrom).toBe("2026-11-02"); // today's 18:00+ slots still count
+  });
+
   it("past time → TIME_OUT_OF_RANGE", () => {
     const result = parseTimeWindow("last Saturday", clockOf());
     expect(result).toMatchObject({ ok: false, error: TIME_OUT_OF_RANGE });

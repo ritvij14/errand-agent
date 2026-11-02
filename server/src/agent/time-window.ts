@@ -135,17 +135,17 @@ export const parseTimeWindow = (text: string, clock: Clock): TimeResult => {
     }
     return { ok: false, error: TIME_OUT_OF_RANGE };
   }
-  if (window.dateFrom === today && window.earliest && !pastMarker && window.earliest < istHM(clock.now())) {
-    // a time earlier today ("at 3pm") means the next 3pm, i.e. tomorrow
+  if (window.dateFrom === today && window.dateTo === today && window.earliest && !pastMarker && window.earliest < istHM(clock.now())) {
+    // a time earlier today ("at 3pm") means the next 3pm, i.e. tomorrow — single-day
+    // windows only: a range that starts today still has today's later slots
     const tomorrow = istDay(new Date(clock.now().getTime() + 86_400_000));
     if (tomorrow <= days[13]!) {
       window.dateFrom = tomorrow;
       window.dateTo = window.dateTo === today ? tomorrow : window.dateTo;
     }
   }
-  if (window.dateFrom === today && !window.earliest) {
-    window.earliest = istHM(clock.now()); // nothing in the past on today's own window
-  }
+  // No "now" bound here: `earliest` applies to every day of the window, and past
+  // slots are already left out by the provider's free-slot calculation.
   return { ok: true, data: window };
 };
 

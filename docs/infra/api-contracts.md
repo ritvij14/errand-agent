@@ -64,7 +64,7 @@ Structured pieces of an agent message. Always built from saved state, never from
 
 | `type`             | Fields                                                                                       | Shown as                                                                                              |
 | ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `option_blocks`    | `blocks: [{ number, provider: { id, name, rating, price }, slots: [{ letter, start }] }]`    | Provider blocks numbered 1…n, slots lettered a, b, c… in an accordion (FR-9). Each slot is a button.  |
+| `option_blocks`    | `blocks: [{ number, provider: { id, name, rating, price }, slots: [{ letter, start }] }]`    | Provider blocks numbered 1…n (earliest slot first), slots lettered a, b, c…, at most 8 per provider, in an accordion (FR-9). Each slot is a button. |
 | `approval_card`    | `approvalId, action, provider: { id, name }, slot, price, bookingId?, status`                | Card with Approve / Decline (FR-10)                                                                   |
 | `provider_details` | `provider: { id, name, rating, price, attributes }, reviews: [{ text, suspectedInjection }]` | Details + "Reviews (from the provider, not checked)", with ⚠ badges (`docs/system-design.md` § 2.5.7) |
 | `bookings_list`    | `bookings: [{ id, provider: { id, name }, service, slot, status }]`                          | List of the user's bookings (FR-5)                                                                    |

@@ -4,6 +4,7 @@ import { createClock } from "../shared/clock.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { createConversationService } from "../conversations/index.js";
 import { scriptedModel } from "../agent/index.js";
+import { seedMockWorld } from "../tools/index.js";
 
 // The scenario runner (§ 2.5.10): each scenario gets its own fresh database, a fixed
 // seed and clock, the scripted model, and a conversation bound to one user. The runner
@@ -13,7 +14,17 @@ export type EvalScenarioStep =
   | { step: "say"; text: string }
   | { step: "advance"; ms: number }
   | { step: "send_concurrently"; text: string }
-  | { step: "expect"; outcome?: string; replyContains?: string; replyNotContains?: string; phase?: string }
+  | {
+      step: "expect";
+      outcome?: string;
+      replyContains?: string;
+      replyNotContains?: string;
+      phase?: string;
+      /** fact values on the workflow, compared exactly */
+      facts?: Record<string, unknown>;
+      /** the last reply's option blocks: present, and every provider price at most this */
+      optionsPriceAtMost?: number;
+    }
   | { step: "click"; decision: "approve" | "decline" };
 
 export type EvalScenario = {
@@ -42,17 +53,21 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
     .map((s) => {
       if (s.step === "say") return `say: "${s.text}"`;
       if (s.step === "advance") return `advance ${s.ms} ms`;
-      if (s.step === "expect") return `expect ${JSON.stringify({ outcome: s.outcome, replyContains: s.replyContains })}`;
+      if (s.step === "expect") {
+        return `expect ${JSON.stringify({ ...s, step: undefined })}`;
+      }
       return s.step;
     })
     .join(" → ");
 
 export const runScenario = async (db: Db, scenario: EvalScenario, userId: string): Promise<ScenarioResult> => {
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
-  const service = createConversationService({ db, clock, model: scriptedModel });
+  seedMockWorld(db, { seed: scenario.seed, clock });
+  const service = createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed } });
   const conversationId = service.createConversation(userId).id;
   let firstFailure: string | null = null;
   let lastReply: string | null = null;
+  let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
 
   for (const step of scenario.steps) {
@@ -66,6 +81,7 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
         }
       } else {
         lastReply = result.reply.message.text;
+        lastParts = result.reply.message.parts;
         lastOutcome = result.reply.outcome;
       }
     } else if (step.step === "advance" as const) {
@@ -81,6 +97,18 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
       if (step.phase) {
         const row = db.prepare(`SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`).get(conversationId) as { phase: string } | undefined;
         if (row?.phase !== step.phase) recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
+      }
+      if (step.facts) {
+        const row = db.prepare(`SELECT facts FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`).get(conversationId) as { facts: string } | undefined;
+        const stored = JSON.parse(row?.facts ?? "{}") as Record<string, { value: unknown }>;
+        for (const [key, value] of Object.entries(step.facts)) {
+          if (JSON.stringify(stored[key]?.value) !== JSON.stringify(value)) recordFailure(`expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`);
+        }
+      }
+      if (step.optionsPriceAtMost !== undefined) {
+        const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as { provider: { price: number } }[] | undefined;
+        if (!blocks?.length) recordFailure("expect option blocks → none in the reply");
+        else if (blocks.some((b) => b.provider.price > step.optionsPriceAtMost!)) recordFailure(`expect every option ≤ ₹${step.optionsPriceAtMost} → found pricier`);
       }
     } else if (step.step === "click") {
       recordFailure("click: approval cards don't exist in the skeleton (U19+)");

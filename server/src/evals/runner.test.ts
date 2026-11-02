@@ -3,7 +3,6 @@ import { createClock } from "../shared/clock.js";
 import { createTestDb } from "../shared/test-db.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { seedDemoUsers } from "../auth/index.js";
-import { seedMockWorld } from "../tools/mock-world.js";
 import { runScenario } from "./runner.js";
 import { SCENARIOS } from "./scenarios.js";
 
@@ -11,7 +10,6 @@ function evalWorld() {
   const testDb = createTestDb();
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
   seedDemoUsers(testDb.db, clock.now().getTime());
-  seedMockWorld(testDb.db, { seed: "eval-seed", clock });
   return { testDb, clock, user: DEMO_USERS[0]!.id };
 }
 

@@ -24,7 +24,30 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "say", text: "I need a plumber, any budget" },
       { step: "expect", replyContains: "which area and when", replyNotContains: "budget" },
       { step: "say", text: "hsr layout mornings only" },
-      { step: "expect", phase: "searching", outcome: "completed" },
+      { step: "expect", phase: "choosing", outcome: "completed", replyNotContains: "budget" },
+    ],
+  },
+  "3": {
+    id: "3",
+    name: "Correct the budget after options → search redone, other details kept",
+    description: "MH-1, FR-8: a budget correction clears the options and searches again; service, area and time window stay as they were.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "expect", phase: "choosing", optionsPriceAtMost: 1500 },
+      // eval-seed plumbers in HSR cost ₹985, ₹995, ₹1,518: ₹990 keeps exactly one
+      { step: "say", text: "make the budget ₹990" },
+      {
+        step: "expect",
+        phase: "choosing",
+        optionsPriceAtMost: 990,
+        facts: {
+          service: "plumber",
+          area: "hsr_layout",
+          budget: 990,
+          time_window: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: null, latest: "12:00" },
+        },
+      },
     ],
   },
 };

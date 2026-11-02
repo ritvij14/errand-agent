@@ -4,6 +4,8 @@ import type { Clock } from "../shared/clock.js";
 import type { AgentModel, ReadResult } from "./index.js";
 import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
 import type { Trace } from "../tracing/index.js";
+import type { ProviderSummary, ToolResult } from "../tools/index.js";
+import { buildOptions, searchRange, type OptionBlock } from "./options.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
 // Facts → candidates → selection → hold → approval build one on top of the other; a
@@ -33,7 +35,13 @@ export type WorkflowRow = {
   updatedAt: number;
 };
 
-export type ApplyOutcome = { phase: string; reply: string; facts: Facts; code?: string };
+export type ApplyOutcome = { phase: string; reply: string; facts: Facts; code?: string; parts?: Record<string, unknown>[] };
+
+/** `search_providers` through the run's tool gateway (the only way to the provider API). */
+export type SearchTool = (args: { service: string; area: string; from: string; to: string }) => ToolResult<{ providers: ProviderSummary[] }>;
+
+/** What the run applying a message lends the store: its trace (MH-7) and its tools. */
+export type RunTools = { trace?: Trace; search?: SearchTool };
 
 const REQUIRED = ["service", "area", "time_window"] as const;
 
@@ -88,9 +96,9 @@ const timeFactHasBounds = (fact: Fact & { value: TimeWindow | null } | undefined
   return !!w && (w.dateFrom !== null || w.dateTo !== null || w.earliest !== null || w.latest !== null);
 };
 
-export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, initialTrace?: Trace) => {
-  // the run that is applying a message lends its trace (one trace per run, MH-7)
-  let trace: Trace | undefined = initialTrace;
+export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => {
+  let trace: Trace | undefined;
+  let search: SearchTool | undefined;
   const nowMs = () => clock.now().getTime();
 
   const getActive = (conversationId: string): WorkflowRow | undefined => {
@@ -133,8 +141,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         ).run(w.id, conversationId, w.user_id, w.intent, w.phase, JSON.stringify(w.facts), w.candidates ? JSON.stringify(w.candidates) : null, w.target_booking_id, w.pending_question, nowMs(), nowMs());
         return { ok: true, workflow: getActive(conversationId) };
-      } catch {
-        return { ok: false }; // concurrent insert lost the unique-index race
+      } catch (err) {
+        if (String((err as Error).message).includes("UNIQUE")) return { ok: false }; // lost the one-active-workflow race
+        throw err;
       }
     }
     const next = mutate({ ...existing! });
@@ -154,8 +163,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
     getActiveWorkflow: getActive,
     currentVersion: (conversationId: string): number => getActive(conversationId)?.version ?? -1,
     saveWorkflow,
-    useTrace: (t: Trace | undefined): void => {
-      trace = t;
+    useRun: (run: RunTools | undefined): void => {
+      trace = run?.trace;
+      search = run?.search;
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
@@ -201,7 +211,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
       if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
       if (values.preferences) facts.preferences = fact("preferences", values.preferences);
 
-      const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts: { ...w.facts, ...facts }, phase: nextPhase(w.facts) }));
+      const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts: { ...w.facts, ...facts }, phase: nextPhase({ ...w.facts, ...facts }) }));
       if (!saved.ok || !saved.workflow) return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
       for (const [key, f] of Object.entries(saved.workflow.facts)) {
         trace?.record("fact_changed", { key, oldValue: null, newValue: (f as Fact).value, source: "user", isCorrection: false });
@@ -209,7 +219,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
       trace?.record("state_transition", { fromPhase: "none", toPhase: saved.workflow.phase, reason: "workflow started" });
       return flags.timeOutOfRange
         ? { phase: saved.workflow.phase, reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.", facts: saved.workflow.facts, code: TIME_OUT_OF_RANGE }
-        : replyFor(saved.workflow);
+        : advance(saved.workflow);
     },
 
     /** Save search results (U18 calls the tool; this stores them on the workflow). */
@@ -281,6 +291,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
     const phase = phaseAfterChange(current, factChanged || timeChanged, facts);
     const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, facts, phase, candidates: factChanged || timeChanged ? null : w.candidates, intent: (values.intent as WorkflowRow["intent"]) ?? w.intent }));
     if (!saved.ok || !saved.workflow) return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
+    const savedWorkflow = saved.workflow;
 
     for (const key of ["service", "area", "time_window", "budget", "preferences"] as (keyof Facts)[]) {
       const before = (current.facts as Facts)[key];
@@ -295,7 +306,38 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
         });
       }
     }
-    return replyFor(saved.workflow);
+    return advance(savedWorkflow);
+  }
+
+  /** `searching` needs no user input, so the code does it now (§ 2.5.3 step 6). */
+  function advance(w: WorkflowRow): ApplyOutcome {
+    if (w.phase !== "searching" || !search) return replyFor(w);
+    const service = String(w.facts.service!.value);
+    const area = String(w.facts.area!.value);
+    const timeWindow = w.facts.time_window!.value!;
+    const found = search({ service, area, ...searchRange(timeWindow, clock) });
+    if (!found.ok) {
+      return { phase: w.phase, reply: "I couldn't reach the provider service just now — try again in a moment.", facts: w.facts, code: found.error };
+    }
+    const options = buildOptions(found.data.providers, { timeWindow, budget: w.facts.budget?.value });
+    const what = `${SERVICE_NAMES[service] ?? service} in ${AREA_NAMES[area] ?? area}`;
+    if (!options.ok) {
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: [] }));
+      const reply =
+        options.filter === "budget"
+          ? `Nobody offering ${what} fits your budget — the cheapest is ₹${options.cheapest.toLocaleString("en-IN")}. Want to raise the budget?`
+          : `Nobody offering ${what} has a free slot in that time. Want to try a wider time window?`;
+      return { phase: "searching", reply, facts: (saved.workflow ?? w).facts, code: "NO_MATCHES" };
+    }
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: options.blocks, phase: "choosing" }));
+    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    const count = options.blocks.length;
+    return {
+      phase: "choosing",
+      reply: `I found ${count} option${count === 1 ? "" : "s"} for ${what}. Pick a provider and slot — for example "1a".`,
+      facts: saved.workflow.facts,
+      parts: [{ type: "option_blocks", blocks: saved.workflow.candidates as OptionBlock[] }],
+    };
   }
 
   /** Rule 2: a changed fact rebuilds what was made from it (candidates and later). */
@@ -314,7 +356,6 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
       return { phase: w.phase, reply: `I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?`, facts: w.facts, code: errorCode };
     }
     const area = typeof w.facts.area?.value === "string" ? w.facts.area.value : null;
-    const service = typeof w.facts.service?.value === "string" ? w.facts.service.value : null;
 
     if (errorCode === TIME_OUT_OF_RANGE) {
       const inArea = area ? ` in ${AREA_NAMES[area] ?? area}` : "";
@@ -335,10 +376,6 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, ini
         .filter((s) => s !== null);
       const subject = known.length > 0 ? known.join(", ") : "that";
       return { phase: "collecting", reply: `${subject ? `${subject} — ` : ""}${asks.join(" and ")}?`, facts: w.facts, code: errorCode };
-    }
-    if (w.phase === "searching") {
-      // U18 replaces this with the real search result
-      return { phase: "searching", reply: `Looking for ${SERVICE_NAMES[service ?? ""] ?? "that"} in ${AREA_NAMES[area ?? ""] ?? "your area"}…`, facts: w.facts, code: errorCode };
     }
     return { phase: w.phase, reply: "", facts: w.facts, code: errorCode };
   }

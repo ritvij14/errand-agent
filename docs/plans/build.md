@@ -237,7 +237,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U18 Search and option blocks
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/options.test.ts` (6 unit), `agent/search.flow.test.ts` (6 flow), regression tests for B1–B3 (`docs/bugs.md`); suite 144/144, evals 3/3. QA `/tmp/verify-U18/drive.txt` on the real clock: full request → 3 numbered blocks (≤₹1,500, mornings, from tomorrow), ₹100 → `NO_MATCHES` naming the budget and the cheapest price, ₹2,000 → re-search with 4 blocks; one `search_providers` tool call per run in the trace.
 - **Depends on.** U15, U17.
 - **Covers.** FR-9, § 2.5.2 `searching` and `choosing`, rule 2 cascade, `NO_MATCHES`.
 - **Build.** `searching` calls `search_providers` through the gateway. Filter by budget, time window and preferences. Option blocks part grouped by provider, providers ordered by earliest slot, numbered 1…n with slots lettered a, b, c. `NO_MATCHES` names the filter that removed everything. A correction after options redoes the search.

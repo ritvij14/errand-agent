@@ -103,6 +103,7 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
   };
 
   return {
+    toolCallsUsed: (): number => used,
     searchProviders: (args: { service: string; area: string; from: string; to: string }): ToolResult<{ providers: ProviderSummary[] }> =>
       budgeted(
         "search_providers",
