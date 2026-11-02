@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import type { TestDb } from "./shared/test-db.js";
 import { createTestDb } from "./shared/test-db.js";
 import { createApp } from "./app.js";
+import { scriptedModel } from "./agent/index.js";
 import { DEMO_USERS } from "./shared/demo-users.js";
 import { createClock } from "./shared/clock.js";
 import { seedDemoUsers } from "./auth/index.js";
@@ -15,7 +16,7 @@ const CSRF_HEADERS = { "sec-fetch-site": "same-origin", "content-type": "applica
 
 beforeAll(async () => {
   testDb = createTestDb();
-  const app = createApp({ db: testDb.db, clock: createClock() });
+  const app = createApp({ db: testDb.db, clock: createClock(), model: scriptedModel });
   seedDemoUsers(testDb.db, Date.now());
   server = app.listen(0);
   const address = server.address() as { port: number };

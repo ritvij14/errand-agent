@@ -168,7 +168,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U12 Conversation runner skeleton and conversations API
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 8 conversation tests red→green (`server/src/conversations.test.ts`; suite 84/84, lint+tsc clean). QA `/tmp/verify-U12/drive.txt`: sign-in → create conversation → help reply → trace (run_started, model_call ×2, run_ended) → clientMessageId replay without a new run → 401/404/VALIDATION_ERROR. Module map in docs/features/conversations.md.
 - **Depends on.** U10, U11.
 - **Covers.** § 2.4 main flow, § 2.5.3 steps of one run, FR-14 (skeleton), R2 (client message ids).
 - **Build.** Rename `server/src/chat` to `server/src/conversations` and delete the scaffold echo route and its test. Conversations: create, list, read, send message. A run row per message with trigger, outcome and call counters. Busy marker returning `CONVERSATION_BUSY`. A model slot with the scripted model's first reply, the `NOT_UNDERSTOOD` help text. Runs trace `run_started`, `model_call`, `run_ended`. `GET /api/runs/:id/trace`. A repeated client message id replays the stored reply.

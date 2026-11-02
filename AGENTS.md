@@ -75,7 +75,7 @@ COMPULSORY TASK - Always be clear on the major release of the tech stack being u
 > Full component design: `docs/system-design.md` § 2.4 (HLD) and § 2.5 (LLD). Names below match its components.
 
 - `server/auth` — users, passwords, auth sessions, CSRF check (§ 2.5.1)
-- `server/conversations` — conversations, messages, the conversation runner: runs, busy check, caps (MH-5, § 2.5.3) _(scaffold folder is still `server/chat`; renamed at build)_
+- `server/conversations` — conversations, messages, the conversation runner: runs, busy check, caps (MH-5, § 2.5.3) (the old `server/chat` scaffold was deleted in U12)
 - `server/agent` — state machine (MH-1, § 2.5.2) and the model slot / scripted model (§ 2.4)
 - `server/tools` — tool gateway + mock provider API, the brief's 8 tools (§ 2.5.4)
 - `server/booking` — booking operations: idempotency, retries, restart recovery (MH-3, § 2.5.6)
@@ -271,7 +271,7 @@ Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shap
 | Feature              | Doc                                 | From the brief                        | Status  |
 | -------------------- | ----------------------------------- | ------------------------------------- | ------- |
 | Auth                 | docs/features/auth.md               | Supports MH-6 (per-user memory), FR-1 | Building |
-| Conversations & runs | docs/features/conversations.md      | MH-5, MH-1 workflow state             | Planned |
+| Conversations & runs | docs/features/conversations.md      | MH-5, MH-1 workflow state             | Building |
 | Agent core           | docs/features/agent-core.md         | MH-1, MH-5                            | Planned |
 | Provider tool mocks  | docs/features/tool-mocks.md         | Fixed tool contract                   | Building |
 | Booking lifecycle    | docs/features/booking-lifecycle.md  | MH-3                                  | Planned |

@@ -315,4 +315,7 @@ Numbered SQL files in `server/migrations/`, applied in order on start; applied v
 | Migration  | Date | What changed                                                                                                               |
 | ---------- | ---- | -------------------------------------------------------------------------------------------------------------------------- |
 | 001_mock_world | 2026-11-02 | Provider side: `mock_provider`, `mock_provider_area`, `mock_review`, `mock_booking` (+`area`, R4), `mock_hold`, `mock_idempotency`, `mock_attempt` |
-| _later_        | —    | Planned: `002_auth`, `003_conversations_runs_traces`, `004_workflow_approval_operation`, `005_memory` |
+| 002_auth       | 2026-11-02 | `user`, `auth_session` (Argon2id, hashed tokens) |
+| 003_trace_events | 2026-11-02 | `trace_event` (per-run event list, allow-listed data) |
+| 004_conversations | 2026-11-02 | `conversation`, `run`, `message` (+client_message_id unique, R2) |
+| _later_        | —    | Planned: `005_workflow` (approval/operation/memory migrations follow their units) |

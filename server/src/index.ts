@@ -2,6 +2,7 @@ import { openDatabase, runMigrations } from "./shared/db.js";
 import { createClock } from "./shared/clock.js";
 import { seedDemoUsers } from "./auth/index.js";
 import { seedMockWorld } from "./tools/mock-world.js";
+import { scriptedModel } from "./agent/index.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createApp } from "./app.js";
@@ -16,6 +17,6 @@ if ((db.prepare("SELECT COUNT(*) AS c FROM mock_provider").get() as { c: number 
 }
 
 const port = Number(process.env.PORT ?? 3001);
-createApp({ db, clock }).listen(port, () => {
+createApp({ db, clock, model: scriptedModel }).listen(port, () => {
   console.log(`server listening on http://localhost:${port}`);
 });
