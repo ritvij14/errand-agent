@@ -525,6 +525,47 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "expect", replyContains: "HSR Layout" },
     ],
   },
+  // ——— inferred memory (MH-6, V-12, I-7, U33) ———
+  "17": {
+    id: "17",
+    name: "Inferred preferred electrician after 2 bookings → asked → confirmed → used",
+    description:
+      "MH-6, I-7: two completed bookings with the same provider propose the fact with evidence; the options are not narrowed before the user confirms; yes activates it and the options narrow.",
+    seed: "eval-seed",
+    steps: [
+      { step: "seedCompletedBooking" },
+      { step: "conversation", name: "later" },
+      { step: "say", text: "book an electrician in koramangala this week" },
+      { step: "expect", replyContains: "keep them coming", phase: "choosing" },
+      { step: "expect", memoryStatus: { key: "preferred_provider", status: "awaiting_confirmation" } },
+      { step: "say", text: "yes" },
+      { step: "expect", replyContains: "your choice", optionsBlockCount: 1 },
+      { step: "expect", memoryStatus: { key: "preferred_provider", status: "active" } },
+    ],
+  },
+  "18": {
+    id: "18",
+    name: "Forget the preferred electrician → more bookings with them → never inferred again",
+    description:
+      "V-12: the user confirms, then forgets; further requests never re-propose or re-ask — the forgotten marker blocks inference.",
+    seed: "eval-seed",
+    steps: [
+      { step: "seedCompletedBooking" },
+      { step: "conversation", name: "first" },
+      { step: "say", text: "book an electrician in koramangala this week" },
+      { step: "say", text: "yes" },
+      { step: "expect", memoryStatus: { key: "preferred_provider", status: "active" } },
+      { step: "conversation", name: "second" },
+      { step: "say", text: "forget my saved provider" },
+      { step: "expect", replyContains: "Forgotten" },
+      { step: "expect", memoryStatus: { key: "preferred_provider", status: "forgotten" } },
+      { step: "seedCompletedBooking" },
+      { step: "conversation", name: "third" },
+      { step: "say", text: "book an electrician in koramangala this week" },
+      { step: "expect", replyNotContains: "keep them coming" },
+      { step: "expect", memoryStatus: { key: "preferred_provider", status: "forgotten" } },
+    ],
+  },
   "12": {
     id: "12",
     name: "Reschedule: slot conflict → back to the same provider's options → rescheduled at the same price",

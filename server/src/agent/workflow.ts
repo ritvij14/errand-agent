@@ -372,6 +372,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       return startChange("reschedule", userId, conversationId, synced, text, read.timeWindow);
     if (active?.pending_question && read.kind === "decision") {
       const pending = JSON.parse(active.pending_question) as { type?: string; text?: string };
+      if (pending.type === "memory_confirm" && !approvals.getOpen(active.id)) {
+        return decideMemoryConfirm(active, userId, conversationId, pending as never, read.decision === "yes");
+      }
       if (pending.type === "task_switch" && !approvals.getOpen(active.id)) {
         const ended = saveWorkflow(conversationId, active.version, (w) => ({
           ...w,
@@ -580,6 +583,33 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         facts: saved.workflow.facts,
         code: TIME_OUT_OF_RANGE,
       };
+    // U33: propose a remembered preferred provider from the user's own booking history
+    // (only for book, only when memory doesn't already answer it); one yes/no ask rides
+    // on the reply as R9 priority 3.
+    const proposal =
+      intent === "book" && values.service
+        ? proposePreferredProvider(
+            saved.workflow,
+            userId,
+            values.service,
+            (read as { sameAsLast?: boolean }).sameAsLast === true,
+          )
+        : undefined;
+    let withPendingRow: WorkflowRow | undefined = saved.workflow;
+    if (proposal) {
+      const withPending = saveWorkflow(conversationId, saved.workflow.version, (w) => ({
+        ...w,
+        pending_question: JSON.stringify({
+          type: "memory_confirm",
+          factId: proposal.factId,
+          key: "preferred_provider",
+          value: proposal.providerId,
+          service: values.service ?? null,
+          label: proposal.providerName,
+        }),
+      }));
+      withPendingRow = withPending.workflow;
+    }
     // V-11: the request's area wins over the saved one — memory keeps it, one light note.
     const savedArea = memoryApi.state(db, userId, "area");
     const userArea = facts.area ? (facts.area.value as string) : undefined;
@@ -587,8 +617,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       userArea && savedArea && userArea !== savedArea.value
         ? ` I'll book that in ${AREA_NAMES[userArea] ?? userArea} this time — your saved area stays ${AREA_NAMES[savedArea.value] ?? savedArea.value} (“update my area” if you've moved).`
         : "";
-    const outcome = await advance(saved.workflow);
-    const prefix = `${memoryNotes.join(" ")}${differs}`.trim();
+    const outcome = await advance(withPendingRow!);
+    let prefix = `${memoryNotes.join(" ")}${differs}`.trim();
+    if (proposal) prefix = `${prefix} ${proposal.ask}`.trim();
     return prefix ? { ...outcome, reply: `${prefix} ${outcome.reply}`.trim() } : outcome;
   };
 
@@ -1351,6 +1382,126 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   }
 
   /**
+   * U33 (2.5.8): the same provider in this user's own completed bookings for the
+   * service (or "same as last time") → an `awaiting_confirmation` fact with evidence
+   * naming the bookings (V-12 checks forgotten markers first), plus one light yes/no
+   * ask stored as the pending question (R9 priority 3). Skipped when memory already
+   * answers the key or the user's own bookings never repeat a provider.
+   */
+  function proposePreferredProvider(
+    w: WorkflowRow,
+    userId: string,
+    service: string,
+    sameAsLast: boolean,
+  ): { ask: string; providerName: string; providerId: string; factId: string } | undefined {
+    if (w.intent !== "book" || !service || !list) return undefined;
+    if (memoryApi.state(db, userId, "preferred_provider", service)) return undefined;
+    const listed = list();
+    if (!listed.ok) return undefined;
+    const completed = listed.data.bookings.filter((b) => b.service === service && b.status === "completed");
+    const byProvider = new Map<string, { name: string; days: string[] }>();
+    for (const b of completed) {
+      const e = byProvider.get(b.providerId) ?? { name: b.providerName, days: [] };
+      e.days.push(b.slot.slice(0, 10));
+      byProvider.set(b.providerId, e);
+    }
+    const entry = [...byProvider.entries()].find(([, e]) => e.days.length >= (sameAsLast ? 1 : 2));
+    if (!entry) return undefined;
+    const [providerId, pick] = entry;
+    const label = SERVICE_NAMES[service] ?? service;
+    const result = memoryApi.inferCandidate(
+      db,
+      clock,
+      userId,
+      "preferred_provider",
+      providerId,
+      service,
+      sameAsLast
+        ? `the same ${label} as last time — booked ${pick.name} on ${pick.days.join(" and ")}`
+        : `${label} bookings with ${pick.name} on ${pick.days.join(" and ")}`,
+      (event, r) => trace?.record("memory_event", { event, key: r.key, value: r.value }),
+    );
+    if (!result.created || !result.fact) return undefined;
+    const ask = `Your last ${sameAsLast ? "" : "two "}${label} bookings ${sameAsLast ? "was" : "were"} with ${pick.name} — keep them coming?`;
+    return { ask, providerName: pick.name, providerId, factId: result.fact.id };
+  }
+
+  /**
+   * FR-6 (U31) comment header preserved for history; this function is decideMemoryConfirm.
+   * R9 priority 3: answers the confirmed-memory yes/no (waited for no card and no switch
+   * question, or it wouldn't exist).
+   */
+  function decideMemoryConfirm(
+    current: WorkflowRow,
+    userId: string,
+    conversationId: string,
+    pending: { factId: string; key: string; value: string; service: string | null; label: string },
+    yes: boolean,
+  ): ApplyOutcome {
+    // the question clears first; the row it returns is the one every later save matches
+    const cleared = saveWorkflow(conversationId, current.version, (w) => ({ ...w, pending_question: null }));
+    const base = cleared.ok && cleared.workflow ? cleared.workflow : current;
+    if (!yes) {
+      memoryApi.reject(db, clock, userId, pending.factId, (record) =>
+        trace?.record("memory_event", { event: "forgotten", key: record.key, value: record.value }),
+      );
+      return {
+        phase: base.phase,
+        reply:
+          `Okay — I won't suggest that again. ${base.phase === "collecting" ? "" : "Picking up where we were."}`.trim(),
+        facts: base.facts,
+      };
+    }
+    memoryApi.confirm(db, clock, userId, pending.factId, (record) =>
+      trace?.record("memory_event", { event: "confirmed", key: record.key, value: record.value }),
+    );
+    trace?.record("memory_event", { event: "used", key: pending.key, value: pending.value });
+    // the confirmed fact applies to this booking right away
+    if (pending.key === "preferred_provider")
+      return applyPreferredProviderNow(base, pending.value, pending.label);
+    const facts = { ...base.facts } as Facts;
+    facts.area = memoryFactOf(pending.key, { id: pending.factId, value: pending.value }) as Fact & {
+      value: string;
+    };
+    const saved = saveWorkflow(conversationId, base.version, (w) => ({
+      ...w,
+      facts,
+      phase: phaseAfterChange(base, true, facts),
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: base.phase, reply: "", code: "unknown_error", facts: base.facts };
+    const outcome = advance(saved.workflow);
+    return {
+      ...outcome,
+      reply:
+        `Using your saved ${pending.key === "area" ? "area" : "time"}: ${AREA_NAMES[pending.value] ?? pending.value}. ${outcome.reply}`.trim(),
+    };
+  }
+
+  /** The confirmed provider narrows the options on screen to just their slots. */
+  function applyPreferredProviderNow(
+    current: WorkflowRow,
+    providerId: string,
+    providerName: string,
+  ): ApplyOutcome {
+    const blocks = (current.candidates as OptionBlock[]) ?? [];
+    const kept = blocks.filter((b) => b.provider.id === providerId);
+    if (!kept.length)
+      return {
+        phase: current.phase,
+        reply: `Saved: ${providerName} is your preferred ${current.facts.service?.value ? `${SERVICE_NAMES[String(current.facts.service.value)] ?? current.facts.service.value} provider` : "provider"} from now on. (No free slot with them right now.)`,
+        facts: current.facts,
+      };
+    const saved = saveWorkflow(current.conversation_id, current.version, (w) => ({ ...w, candidates: kept }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
+    return optionsOutcome(
+      saved.workflow,
+      `Saved your choice: ${providerName}. Here are their times — tap one and press Confirm.`,
+    );
+  }
+
+  /**
    * FR-6 (U31): answer a details question without touching the workflow — the reply is
    * built from structured fields only (2.5.7 rule 2) and reviews ride as a labelled part
    * the model's read never saw (rule 1). Only the user's ask brings them here.
@@ -1873,6 +2024,19 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const area = String(w.facts.area!.value);
     const timeWindow = w.facts.time_window!.value!;
     const found = search({ service, area, ...searchRange(timeWindow, clock) });
+    // MH-6 (U33): an active preferred provider for this service narrows the search — the
+    // user confirmed it; only structured ids, never free text (2.5.7 rule 2)
+    const preferred = memoryApi.state(db, w.user_id, "preferred_provider", service);
+    const preferredName =
+      preferred && found.ok ? found.data.providers.find((p) => p.id === preferred.value)?.name : undefined;
+    const filtered =
+      preferred && found.ok
+        ? found.data.providers.filter((p) => p.id === preferred.value)
+        : found.ok
+          ? found.data.providers
+          : [];
+    if (preferredName && preferred)
+      trace?.record("memory_event", { event: "used", key: "preferred_provider", value: preferred.value });
     if (!found.ok) {
       return {
         phase: w.phase,
@@ -1881,14 +2045,19 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         code: found.error,
       };
     }
-    const options = buildOptions(found.data.providers, { timeWindow, budget: w.facts.budget?.value });
+    const options = buildOptions(filtered.length ? filtered : found.data.providers, {
+      timeWindow,
+      budget: w.facts.budget?.value,
+    });
     const what = `${SERVICE_NAMES[service] ?? service} in ${AREA_NAMES[area] ?? area}`;
     if (!options.ok) {
       const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: [] }));
       const reply =
         options.filter === "budget"
           ? `Nobody offering ${what} fits your budget — the cheapest is ₹${options.cheapest.toLocaleString("en-IN")}. Want to raise the budget?`
-          : `Nobody offering ${what} has a free slot in that time. Want to try a wider time window?`;
+          : preferred
+            ? `Your saved ${SERVICE_NAMES[service] ?? service} choice has no free slot in that time — want a wider time window?`
+            : `Nobody offering ${what} has a free slot in that time. Want to try a wider time window?`;
       return { phase: "searching", reply, facts: (saved.workflow ?? w).facts, code: "NO_MATCHES" };
     }
     const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
@@ -1899,9 +2068,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (!saved.ok || !saved.workflow)
       return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     const count = options.blocks.length;
+    const preferredNote = preferredName ? `Using your saved choice: ${preferredName}. ` : "";
     return {
       phase: "choosing",
-      reply: `I found ${count} option${count === 1 ? "" : "s"} for ${what}. Tap a slot and press Confirm, or tell me the provider and time.`,
+      reply: `${preferredNote}I found ${count} option${count === 1 ? "" : "s"} for ${what}. Tap a slot and press Confirm, or tell me the provider and time.`,
       facts: saved.workflow.facts,
       parts: [{ type: "option_blocks", blocks: saved.workflow.candidates as OptionBlock[] }],
     };

@@ -1,6 +1,6 @@
 # Memory & preferences (MH-6)
 
-> Status: stated memory live (U32). Inferred memory (U33), the memory panel and its API (U34) come next.
+> Status: stated + inferred memory live (U32, U33). The memory panel and its API (U34) come next.
 
 ## What exists
 
@@ -11,7 +11,14 @@
 
 - Only **explicit, lasting statements** from the user's chat: "I live in HSR", "my area is Koramangala now", "never before 10am". The scripted model reads these as `memory_save` (key `area` / `earliest_time`) — checked before the normal workflow read, so a one-off "plumber in HSR" still reads as a booking request and is never saved.
 - View / forget by chat: "what do you remember about me?" → the user's facts, each labelled ("you told me" / "I worked out"); "forget my area" → the record becomes `forgotten`. Phase and facts of the conversation are untouched by both.
-- Inferred facts (same value across 2 completed bookings) are U33; the panel and its endpoints are U34.
+
+## Inferred facts (U33)
+
+- **Detection** happens when a book request for a service starts and memory has no active answer: the user's own `list_bookings` history (structured data, never free text) is scanned — the same provider in **2 completed bookings**, or a one-off use via "the same electrician as last time" (`sameAsLast` on the read). `memory.inferCandidate` creates the fact as `awaiting_confirmation` with evidence naming the bookings ("electrical work bookings with Namma Wires & Lights on 2026-10-30 and 2026-10-25"); a forgotten value (`blockedByForget`) is never inferred again; an already active fact for the key makes the proposal pointless; a repeated proposal changes nothing.
+- **The ask** rides on the request's reply — "Your last two electrical work bookings were with Namma X — keep them coming?" — stored as the workflow's `pending_question` `{type: "memory_confirm", factId, key, value, service, label}` (R9 priority 3; never stacked inside a card or a switch ask — the code only asks when both are absent).
+- **Yes** (`decideMemoryConfirm`) → `active` (+ `confirmed_at`; `source` stays `inferred`), **used immediately**: an area fact fills the workflow and the flow advances; a provider narrows the options on screen to just their slots ("Saved your choice: X. Here are their times…"). **No** → the fact is `forgotten` and the value blocked from re-inference.
+- **While awaiting, the fact is never used (I-7):** the search filter and R6 fill read only `status = 'active'` records. The runner checks that every `source = memory` workflow fact points at an active store row (I-6 covers forgotten, I-7 covers not-yet-confirmed).
+- **Active preferred providers narrow the search** (`advance`'s searching step): the searched providers are filtered to the saved one, with a "Using your saved choice: X." note; when they have no free slot the reply says so instead of silently widening.
 
 ## How facts are used
 

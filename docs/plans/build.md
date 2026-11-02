@@ -419,7 +419,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U33 Inferred memory and confirmation
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `memory/memory.test.ts` (awaiting fact with evidence naming the bookings; repeat proposal unchanged; confirm keeps `source: inferred`; reject forgets and blocks re-inference; an active fact skips the proposal), `agent/memory.flow.test.ts` (two completed bookings → awaiting + ask, options NOT narrowed before confirm (I-7), "yes" activates and narrows the options to the provider; "no" forgets and the same provider is never re-proposed; "the same electrician as last time" proposes from the phrase), runner `seedCompletedBooking` step + `memoryStatus` expect + **I-7 on** (memory-sourced workflow facts must reference an ACTIVE store row). Evals 17, 18. Suite 282/282, client 25/25, evals 30/30. QA `/tmp/verify-U33/drive.txt`: Namma Wires & Lights proposed with both bookings' dates, not used before "yes", then filtered.
 - **Depends on.** U32, U22.
 - **Covers.** MH-6 inferred facts, V-12, I-7, R9 (pending question).
 - **Build.** The same value in 2 completed bookings, or "same as last time", creates an `awaiting_confirmation` fact with evidence. The agent asks when it would be useful. Yes makes it active. No forgets it. A forgotten value is never inferred again.

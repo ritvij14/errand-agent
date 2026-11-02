@@ -46,7 +46,102 @@ const setup = () => {
   return { testDb, conversation, facts, phases };
 };
 
+describe("inferred preferred provider (U33, V-12, R9)", () => {
+  // the seeded demo booking mb-demo-electrician is alice's completed electrician job with one provider
+  const addCompletedBooking = (t: ReturnType<typeof setup>) => {
+    const providerId = (
+      t.testDb.db.prepare(`SELECT provider_id FROM mock_booking WHERE id = 'mb-demo-electrician'`).get() as {
+        provider_id: string;
+      }
+    ).provider_id;
+    t.testDb.db
+      .prepare(
+        `INSERT INTO mock_booking (id, user_id, provider_id, service, area, slot, price, status, cancel_503_served, created_at, updated_at)
+         VALUES ('mb-x2', ?, ?, 'electrician', 'koramangala', '2026-10-31T09:00:00+05:30', 500, 'booked', 0, 0, 0)`,
+      )
+      .run(ALICE, providerId);
+    return providerId;
+  };
+
+  it("two completed bookings with the same provider propose the fact with evidence; awaiting is never used; 'yes' confirms and filters the options", async () => {
+    const t = setup();
+    const providerId = addCompletedBooking(t);
+    const c = t.conversation();
+    const reply = await c.say("book an electrician in koramangala this week");
+    const fact = memory.view(t.testDb.db, ALICE)[0]!;
+    expect(fact).toMatchObject({
+      key: "preferred_provider",
+      service: "electrician",
+      value: providerId,
+      status: "awaiting_confirmation",
+      source: "inferred",
+    });
+    expect(fact.evidence).toMatch(/bookings with|booked/i);
+    // the ask is one light question; the search is NOT filtered yet (I-7)
+    expect(reply.message.text).toMatch(/keep them coming|last two/i);
+    const blocksCount = (
+      reply.message.parts.find((p) => (p as { type: string }).type === "option_blocks") as
+        { blocks?: unknown[] } | undefined
+    )?.blocks?.length;
+    expect(blocksCount ?? 0).toBeGreaterThan(1);
+    // "yes" binds to the confirm question: the fact activates and the options narrow
+    const yes = await c.say("yes");
+    expect(memory.state(t.testDb.db, ALICE, "preferred_provider", "electrician")).toMatchObject({
+      status: "active",
+      source: "inferred",
+    });
+    expect(yes.message.text).toMatch(/your choice/i);
+    const after = (
+      yes.message.parts.find((p) => (p as { type: string }).type === "option_blocks") as
+        { blocks?: { provider: { id: string } }[] } | undefined
+    )?.blocks;
+    expect(after && after.length > 0).toBe(true);
+    expect(after!.every((b) => b.provider.id === providerId)).toBe(true);
+    t.testDb.close();
+  });
+
+  it("'no' forgets the proposal; the same provider is never inferred again (V-12)", async () => {
+    const t = setup();
+    addCompletedBooking(t);
+    const c = t.conversation();
+    await c.say("book an electrician in koramangala this week");
+    expect(memory.view(t.testDb.db, ALICE)).toHaveLength(1);
+    await c.say("no");
+    expect(memory.view(t.testDb.db, ALICE)).toHaveLength(0);
+    // another request with the same provider: no new awaiting fact, no ask
+    const again = await c.say("book an electrician in koramangala next week");
+    expect(memory.view(t.testDb.db, ALICE)).toHaveLength(0);
+    expect(again.message.text).not.toMatch(/keep them coming|last two/i);
+    t.testDb.close();
+  });
+
+  it("'the same electrician as last time' proposes from the phrase with the last booking as evidence", async () => {
+    const t = setup();
+    const providerId = addCompletedBooking(t);
+    const c = t.conversation();
+    const reply = await c.say("the same electrician as last time in koramangala, any time");
+    const fact = memory.view(t.testDb.db, ALICE)[0]!;
+    expect(fact).toMatchObject({
+      key: "preferred_provider",
+      value: providerId,
+      status: "awaiting_confirmation",
+    });
+    expect(fact.evidence).toMatch(/as last time|booked/i);
+    expect(reply.message.text).toMatch(/keep them coming/i);
+    t.testDb.close();
+  });
+});
+
 describe("stated memory (MH-6)", () => {
+  it("a one-off request detail is never saved as stated", async () => {
+    const t = setup();
+    const { id, say } = t.conversation();
+    await say("plumber in HSR");
+    expect(t.testDb.db.prepare(`SELECT COUNT(*) c FROM memory_fact`).get()).toEqual({ c: 0 });
+    t.testDb.close();
+    void id;
+  });
+
   it("a one-off request detail is never saved as stated", async () => {
     const t = setup();
     const { id, say } = t.conversation();

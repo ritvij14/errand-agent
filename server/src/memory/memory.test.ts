@@ -66,3 +66,79 @@ describe("the memory store", () => {
     db.close();
   });
 });
+
+describe("inferred facts (U33, MH-6)", () => {
+  it("two completed bookings propose an awaiting fact with evidence naming the bookings", () => {
+    const db = t();
+    const created = memory.inferCandidate(
+      db.db,
+      db.clock,
+      "u1",
+      "preferred_provider",
+      "mp-009",
+      "electrician",
+      "booked Namma Wires & Lights on 24 Oct and 1 Nov",
+    );
+    expect(created).toMatchObject({ created: true });
+    const row = memory.view(db.db, "u1")[0]!;
+    expect(row).toMatchObject({
+      key: "preferred_provider",
+      service: "electrician",
+      value: "mp-009",
+      source: "inferred",
+      status: "awaiting_confirmation",
+    });
+    expect(row.evidence).toContain("24 Oct");
+    // a second proposal of the same value changes nothing
+    expect(
+      memory.inferCandidate(db.db, db.clock, "u1", "preferred_provider", "mp-009", "electrician", "again"),
+    ).toMatchObject({ created: false });
+    expect(memory.view(db.db, "u1")).toHaveLength(1);
+    db.close();
+  });
+
+  it("confirm activates and keeps source inferred; reject forgets and blocks re-inference", () => {
+    const db = t();
+    const proposal = memory.inferCandidate(
+      db.db,
+      db.clock,
+      "u1",
+      "preferred_provider",
+      "mp-009",
+      "electrician",
+      "booked on 24 Oct and 1 Nov",
+    );
+    const factId = proposal.fact!.id;
+    const confirmed = memory.confirm(db.db, db.clock, "u1", factId);
+    expect(confirmed).toMatchObject({ status: "active", source: "inferred" });
+    db.db
+      .prepare(`UPDATE memory_fact SET status='awaiting_confirmation', confirmed_at=NULL WHERE id=?`)
+      .run(factId);
+    memory.reject(db.db, db.clock, "u1", factId);
+    expect(memory.state(db.db, "u1", "preferred_provider", "electrician")).toBeUndefined();
+    expect(memory.blockedByForget(db.db, "u1", "preferred_provider", "mp-009")).toBe(true);
+    expect(
+      memory.inferCandidate(db.db, db.clock, "u1", "preferred_provider", "mp-009", "electrician", "again"),
+    ).toMatchObject({ created: false, note: "blocked" });
+    db.close();
+  });
+
+  it("no proposal when an active fact already answers the key; area key needs no service", () => {
+    const db = t();
+    memory.saveStated(db.db, db.clock, "u1", "area", "hsr_layout");
+    expect(
+      memory.inferCandidate(
+        db.db,
+        db.clock,
+        "u1",
+        "area",
+        "hsr_layout",
+        null,
+        "booked in HSR on 24 Oct and 1 Nov",
+      ),
+    ).toMatchObject({ created: false, note: "already-active" });
+    memory.saveStated(db.db, db.clock, "u1", "area", "koramangala");
+    expect(memory.blockedByForget(db.db, "u1", "area", "hsr_layout")).toBe(false);
+    db.close();
+  });
+});

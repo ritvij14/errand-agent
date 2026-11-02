@@ -24,6 +24,8 @@ export type EvalScenarioStep =
   | { step: "force"; tool: string; outcome: string }
   /** tap a slot and press Confirm: sends that slot's pickText, as the page does (ADR-007) */
   | { step: "pick"; block?: number; slot?: number }
+  /** add a past completed booking with the demo history's provider (memory evals need 2 completed jobs) */
+  | { step: "seedCompletedBooking" }
   | {
       step: "expect";
       outcome?: string;
@@ -38,6 +40,8 @@ export type EvalScenarioStep =
       optionsBlockCount?: number;
       /** the last reply's provider_details part: exactly this many reviews flagged as suspected injection */
       providerDetailsSuspicious?: number;
+      /** a memory fact must exist with exactly this key/value/status (memory invariants) */
+      memoryStatus?: { key: string; value?: string; status: string };
       /** the last reply's approval card equals the stored approval record (§ 2.5.5) */
       cardMatchesApproval?: boolean;
       /** the card's price differs from the picked option's search price (V-2) */
@@ -231,6 +235,24 @@ export const runScenario = async (
         pickedSearchPrice = block.provider.price;
         await send("pick", slot.pickText);
       }
+    } else if (step.step === "seedCompletedBooking") {
+      const history = db
+        .prepare(`SELECT provider_id, service FROM mock_booking WHERE id = 'mb-demo-electrician'`)
+        .get() as { provider_id: string; service: string } | undefined;
+      if (!history) recordFailure("seedCompletedBooking → the demo history booking is missing");
+      else {
+        // a distinct past day per insert: the provider+slot pair must stay exclusive
+        const n = (
+          db.prepare(`SELECT COUNT(*) c FROM mock_booking WHERE id LIKE 'mb-demo-eval-%'`).get() as {
+            c: number;
+          }
+        ).c;
+        db.prepare(
+          `INSERT INTO mock_booking (id, user_id, provider_id, service, area, slot, price, status, cancel_503_served, created_at, updated_at)
+             VALUES ('mb-demo-eval-' || lower(hex(randomblob(6))), ?, ?, 'electrician', 'koramangala', '2026-10-'
+               || printf('%02d', 28 - ?) || 'T09:00:00+05:30', 500, 'booked', 0, 0, 0)`,
+        ).run(userId, history.provider_id, n);
+      }
     } else if (step.step === ("advance" as const)) {
       clock.advanceMs((step as { ms: number }).ms);
     } else if (step.step === "expect") {
@@ -271,6 +293,19 @@ export const runScenario = async (
               `expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`,
             );
         }
+      }
+      if (step.memoryStatus !== undefined) {
+        const want = step.memoryStatus;
+        const rows = db
+          .prepare(`SELECT value, status FROM memory_fact WHERE user_id = ? AND key = ?`)
+          .all(userId, want.key) as { value: string; status: string }[];
+        const hit = rows.find(
+          (r) => (want.value === undefined || r.value === want.value) && r.status === want.status,
+        );
+        if (!hit)
+          recordFailure(
+            `expect memory ${want.key}${want.value ? `=${want.value}` : ""} ${want.status} → have [${rows.map((r) => `${r.value}:${r.status}`).join(", ") || "none"}]`,
+          );
       }
       if (step.providerDetailsSuspicious !== undefined) {
         const detail = lastParts.find((p) => p.type === "provider_details") as
@@ -360,7 +395,7 @@ export const runScenario = async (
 };
 
 // Invariants over stored state (§ 2.5.10). More switch on as their units land.
-const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-6", "I-8", "I-9", "I-10"] as const;
+const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-6", "I-7", "I-8", "I-9", "I-10"] as const;
 
 /**
  * I-1, I-2, I-3 — bookings. Agent-created bookings are the ones with a provider-side
@@ -479,7 +514,8 @@ export const checkInvariants = (
       if (fact.source !== "memory" || !fact.memoryFactId) continue;
       const row = db.prepare(`SELECT status FROM memory_fact WHERE id = ?`).get(fact.memoryFactId) as
         { status: string } | undefined;
-      if (row?.status === "forgotten") return `I-6: workflow ${w.id} still uses a forgotten memory fact`;
+      if (row?.status !== "active")
+        return `I-${row?.status === "forgotten" ? "6" : "7"}: workflow ${w.id} uses a memory fact that is ${row?.status ?? "missing"} (I-7: an inferred fact is never used before it is confirmed)`;
     }
   }
   for (const row of db

@@ -54,13 +54,15 @@ describe("search and option blocks", () => {
     expect(reply.message.text).toMatch(/tap a slot/i);
     expect(workflow().phase).toBe("choosing");
     const events = readTrace(testDb.db, reply.runId);
+    // the booking-history read for provider inference (U33) rides on every book start
     expect(
       events.filter((e) => e.type === "tool_call").map((e) => (e.data as { tool: string }).tool),
-    ).toEqual(["search_providers"]);
+    ).toEqual(["list_bookings", "search_providers"]);
     const run = testDb.db.prepare(`SELECT tool_calls FROM run WHERE id = ?`).get(reply.runId) as {
       tool_calls: number;
     };
-    expect(run.tool_calls).toBe(1);
+    // U33: the inference probe adds a list_bookings call to every book start
+    expect(run.tool_calls).toBe(2);
     testDb.close();
   });
 

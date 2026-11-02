@@ -18,6 +18,8 @@ export type ReadResult =
       unknownService?: boolean;
       unknownArea?: boolean;
       timeOutOfRange?: boolean;
+      /** MH-6 (U33): "the same X as last time" — one use toward the provider inference */
+      sameAsLast?: boolean;
     }
   | {
       kind: "correction";
@@ -52,15 +54,19 @@ const VAGUE_PICK_RE = /\b(first|second|third|fourth|fifth|last|that|this|other) 
 
 // MH-6 (U32): lasting statements only. One-off details never match these.
 const MEMORY_VIEW_RE = /what do you remember|what'?'s remembered|my preferences[?]*$/i;
-const MEMORY_FORGET_RE = /\bforget (?:my |the )?(area|saved area|time|provider)\b/i;
+const MEMORY_FORGET_RE =
+  /\bforget (?:my |the )?(area|saved area|time|saved provider|preferred provider|provider)\b/i;
 const MEMORY_FORGET_KEYS: Record<string, string> = {
   area: "area",
   "saved area": "area",
   time: "earliest_time",
   provider: "preferred_provider",
+  "saved provider": "preferred_provider",
+  "preferred provider": "preferred_provider",
 };
 const MEMORY_AREA_SAVE_RE = /\b(?:i live in|remember (?:that )?i live in|my area is|always in)\b/i;
 const MEMORY_TIME_SAVE_RE = /\b(?:never|not)\s+before\b/i;
+const SAMELAST_RE = /\bsame\b[^.?!]*\bas last time\b/i;
 
 /** A lasting statement → a memory fact to save. Undefined for one-off details. */
 const readMemorySave = (text: string, clock: Clock): ReadResult | undefined => {
@@ -296,6 +302,8 @@ export const readUserMessage = async (
     ...(service ? { service } : {}),
     ...(area ? { area } : {}),
     ...(window ? { timeWindow: window } : {}),
+    // MH-6 (U33): "the same electrician as last time" is one use toward the provider inference
+    ...(SAMELAST_RE.test(text) ? { sameAsLast: true } : {}),
     ...(text.match(/\bany\s+budget|don'?t\s*care.*budget|no\s+budget/i)
       ? { budget: "any" as const }
       : budgetMatch
