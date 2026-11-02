@@ -146,7 +146,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U10 Auth API, error catalogue and demo users
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 13 auth integration tests red→green (`server/src/auth.test.ts`; suite 73/73, lint + typecheck clean). QA `/tmp/verify-U10/doctor.txt`: doctor step 3 passes — sign-in 200 with session cookie, me works, CSRF 403, WRONG_PASSWORD/NO_SUCH_USERNAME codes, alice/bob/charlie seeded beside the 44-provider mock world.
 - **Depends on.** U05.
 - **Covers.** FR-1, § 2.5.1, § 2.5.3 HTTP error catalogue, ADR-005.
 - **Build.** `server/src/auth`: sign-up, sign-in, sign-out, me. Argon2id via `crypto.argon2`. Token `<id>.<secret>` with the hashed secret stored. 10-day sliding auth sessions. Cookie flags. CSRF check (`Sec-Fetch-Site` plus parsed JSON). Per-username token bucket. 2–3 demo users seeded on first start with the ids U06 uses. `server/src/shared` error catalogue and error middleware returning `{ error, code, details }`.

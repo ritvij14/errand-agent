@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createApp } from "./app.js";
 import type { Server } from "node:http";
+import { createApp } from "./app.js";
 
 let server: Server;
 let baseUrl: string;
@@ -18,7 +18,7 @@ afterAll(async () => {
 async function post(path: string, body: unknown) {
   return fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: JSON.stringify(body),
   });
 }

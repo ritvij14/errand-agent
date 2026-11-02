@@ -1,18 +1,21 @@
 import { openDatabase, runMigrations } from "./shared/db.js";
+import { createClock } from "./shared/clock.js";
+import { seedDemoUsers } from "./auth/index.js";
+import { seedMockWorld } from "./tools/mock-world.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createClock } from "./shared/clock.js";
-import { seedMockWorld } from "./tools/mock-world.js";
 import { createApp } from "./app.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const db = openDatabase(join(here, "../../server/data/errand.db"));
+const clock = createClock();
 runMigrations(db, join(here, "../../server/migrations"));
+seedDemoUsers(db, clock.now().getTime());
 if ((db.prepare("SELECT COUNT(*) AS c FROM mock_provider").get() as { c: number }).c === 0) {
-  seedMockWorld(db, { seed: process.env.MOCK_SEED ?? "errand-agent-v1", clock: createClock() });
+  seedMockWorld(db, { seed: process.env.MOCK_SEED ?? "errand-agent-v1", clock });
 }
 
 const port = Number(process.env.PORT ?? 3001);
-createApp().listen(port, () => {
+createApp({ db, clock }).listen(port, () => {
   console.log(`server listening on http://localhost:${port}`);
 });

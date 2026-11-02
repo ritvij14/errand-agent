@@ -270,7 +270,7 @@ Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shap
 
 | Feature              | Doc                                 | From the brief                        | Status  |
 | -------------------- | ----------------------------------- | ------------------------------------- | ------- |
-| Auth                 | docs/features/auth.md               | Supports MH-6 (per-user memory), FR-1 | Planned |
+| Auth                 | docs/features/auth.md               | Supports MH-6 (per-user memory), FR-1 | Building |
 | Conversations & runs | docs/features/conversations.md      | MH-5, MH-1 workflow state             | Planned |
 | Agent core           | docs/features/agent-core.md         | MH-1, MH-5                            | Planned |
 | Provider tool mocks  | docs/features/tool-mocks.md         | Fixed tool contract                   | Building |
