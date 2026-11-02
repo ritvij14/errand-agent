@@ -49,7 +49,7 @@
 ## Cancel: identifying the booking (U28, FR-4, R9)
 
 - **Reading:** any message with "cancel" (except "cancel that", a drop) → `{ kind: "cancel" }`.
-- **Starting:** a cancel opens its own workflow (`intent: cancel`, phase `identifying_booking`). If a request is already in progress the user is asked to drop it first (`TASK_IN_PROGRESS`; the ask-to-switch flow is U30).
+- **Starting (FR-15):** a cancel or reschedule opens its own workflow (`identifying_booking`). On an unfinished request the code asks before dropping (`askBeforeSwitch`); same as U30's booking ask: "You haven't finished booking the plumber. Drop it and cancel the AC servicing?"
 - **Identifying** (`identifyTarget`, pure match in `matchBookings`): the user's own `list_bookings`, upcoming (`booked`) only — a booking id in the text, else the service (`findService`), else a provider name, else all upcoming. One match → a cancel card (approval `action: cancel`, the booking's provider, slot, price and `booking_id`; the workflow keeps `target_booking_id`, and `candidates` holds the target as one provider block so the card and reply can name it). None → `BOOKING_NOT_FOUND`, several → `BOOKING_AMBIGUOUS`: stay in `identifying_booking`, list the upcoming bookings (`bookings_list`) and ask which; the next message is matched the same way.
 - **Decline ends it** (R9): workflow `abandoned`, "I kept your booking. Nothing was cancelled." An expired cancel card re-identifies the same booking for a fresh card.
 
@@ -60,4 +60,12 @@
 - The booking is re-read with `list_bookings` whenever a later run needs it (no local copy of bookings); when the search follows identification in the same run it reuses that read.
 - **One approval helper:** `openApproval` (save `awaiting_approval` + insert the pending approval in one transaction, trace it, draw the card) serves book, cancel and reschedule.
 - A correction never switches the workflow's intent (`applyToWorkflow` keeps `w.intent`); task switching is U30.
+
+## Drop and task switch (U30, FR-15, FR-16, V-10, R9)
+
+- **Reading:** "cancel that", "never mind", "stop", "forget it", "not that", "don't need" → drop. "cancel my …" stays the cancel action. A drop on no active workflow is `NOT_UNDERSTOOD`.
+- **Drop (FR-16):** the open approval is voided (`user_dropped`), the workflow ends `abandoned`, and the wording says what was not done: booking → "Okay, dropped. Nothing was booked."; reschedule → "…Nothing was changed."; cancel → "…Your booking is unchanged." No tool call.
+- **Switch ask (FR-15):** a different intent on an unfinished workflow stores `pending_question` `{type: "task_switch", text, intent}` and asks ("… Drop it and …?"). A plain "yes" abandons the old workflow and re-applies the stored text; "no" clears the question and the task continues (the reply restates the current ask). Both replies are traced as `state_transition`.
+- **No stacking (R9):** with an approval card open the switch is refused ("approve or decline the card above first") instead of asking; during `executing` / `verifying` the switch waits ("still confirming") and a correction is refused with `CHANGE_REFUSED_IN_FLIGHT`.
+- **Bare time/budget answers never switch:** the model reads a lone "Saturday morning" as a book request without a service; only an explicit service in the read counts as a new request (a correction applies it).
 

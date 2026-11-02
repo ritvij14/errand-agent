@@ -478,4 +478,35 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       },
     ],
   },
+  // ——— drop / task switch (FR-15, FR-16, V-10, U30) ———
+  "22": {
+    id: "22",
+    name: "'never mind' abandons the request; a different request asks first; 'yes' starts the new one",
+    description:
+      "FR-16: the drop makes no tool call and says what was not done. FR-15: a cancel on an unfinished booking asks before dropping; yes starts the cancel flow.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in Indiranagar" },
+      { step: "say", text: "never mind" },
+      {
+        step: "expect",
+        phase: "abandoned",
+        replyContains: "Okay, dropped. Nothing was booked.",
+        lastRunToolCalls: [],
+      },
+      { step: "say", text: "electrician in Koramangala" },
+      { step: "say", text: "cancel my AC servicing" },
+      { step: "expect", phase: "collecting", replyContains: "Drop it and cancel the AC servicing?" },
+      { step: "say", text: "yes" },
+      { step: "expect", phase: "awaiting_approval", cardMatchesApproval: true },
+      { step: "force", tool: "cancel", outcome: "ok" },
+      { step: "click", decision: "approve" },
+      {
+        step: "expect",
+        phase: "done",
+        replyContains: "Cancelled",
+        lastRunToolCalls: ["list_bookings:ok", "cancel:glitch", "cancel:ok"],
+      },
+    ],
+  },
 };

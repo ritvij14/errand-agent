@@ -6,7 +6,8 @@ import { scriptedModel, type ReadResult } from "./index.js";
 // Fixed "now" per the design's readings: Mon 2026-11-02 09:15 IST.
 
 const FIX_NOW = new Date("2026-11-02T03:45:00Z");
-const read = async (text: string) => scriptedModel.read({ text, waitingFor: "", clock: createClock({ now: FIX_NOW }) });
+const read = async (text: string) =>
+  scriptedModel.read({ text, waitingFor: "", clock: createClock({ now: FIX_NOW }) });
 
 describe("the scripted model reads V-1 phrases", () => {
   it('"I need a plumber" → book intent, plumbing service, nothing else', async () => {
@@ -44,7 +45,7 @@ describe("the scripted model reads V-1 phrases", () => {
     expect(r.timeWindow).toBeUndefined();
   });
 
-  it('a full booking request carries service + area + time window in one go', async () => {
+  it("a full booking request carries service + area + time window in one go", async () => {
     const result = await read("plumber this week, mornings only, under ₹1,500 in HSR Layout");
     expect(result).toMatchObject({
       kind: "workflow",
@@ -54,7 +55,11 @@ describe("the scripted model reads V-1 phrases", () => {
       budget: 1500,
     });
     if (result.kind === "workflow") {
-      expect(result.timeWindow).toMatchObject({ dateFrom: "2026-11-02", dateTo: "2026-11-08", latest: "12:00" });
+      expect(result.timeWindow).toMatchObject({
+        dateFrom: "2026-11-02",
+        dateTo: "2026-11-08",
+        latest: "12:00",
+      });
     }
   });
 
@@ -75,13 +80,25 @@ describe("corrections (R9)", () => {
     }
   });
 
+  it('"cancel that" / "never mind" / "stop" / "forget it" are drops; "cancel my AC servicing" is the cancel action (FR-16, V-10)', async () => {
+    expect(await read("cancel that")).toMatchObject({ kind: "drop" });
+    expect(await read("never mind")).toMatchObject({ kind: "drop" });
+    expect(await read("stop")).toMatchObject({ kind: "drop" });
+    expect(await read("forget it")).toMatchObject({ kind: "drop" });
+    expect(await read("cancel my AC servicing")).toMatchObject({ kind: "cancel" });
+    expect(await read("cancel my AC servicing")).not.toMatchObject({ kind: "drop" });
+  });
+
   it('"correction phrase but not a time fact" merges; "never mind" is a drop', async () => {
     expect(await read("never mind")).toMatchObject({ kind: "drop" });
     expect(await read("forget it")).toMatchObject({ kind: "drop" });
-    expect(await read("no, keep my budget but after 11")).toMatchObject({ kind: "correction", target: "time_window" });
+    expect(await read("no, keep my budget but after 11")).toMatchObject({
+      kind: "correction",
+      target: "time_window",
+    });
   });
 
-  it('plain yes/no are decision answers when something is waiting', async () => {
+  it("plain yes/no are decision answers when something is waiting", async () => {
     expect(await read("yes")).toMatchObject({ kind: "decision", decision: "yes" });
     expect(await read("no")).toMatchObject({ kind: "decision", decision: "no" });
     expect(await read("confirm")).toMatchObject({ kind: "decision", decision: "yes" });
@@ -89,13 +106,23 @@ describe("corrections (R9)", () => {
 });
 describe("only a plain yes counts (§ 2.5.5 rule 2)", () => {
   it("plain yes / no phrases are decisions", async () => {
-    for (const text of ["yes", "Yes!", "confirm", "go ahead", "book it", "ok"]) expect(await read(text)).toEqual({ kind: "decision", decision: "yes" });
-    for (const text of ["no", "decline", "not this one"]) expect(await read(text)).toEqual({ kind: "decision", decision: "no" });
+    for (const text of ["yes", "Yes!", "confirm", "go ahead", "book it", "ok"])
+      expect(await read(text)).toEqual({ kind: "decision", decision: "yes" });
+    for (const text of ["no", "decline", "not this one"])
+      expect(await read(text)).toEqual({ kind: "decision", decision: "no" });
   });
 
   it("a yes or no carrying a change is a correction, never an approval", async () => {
-    expect(await read("yes but 11am")).toMatchObject({ kind: "correction", target: "time_window", mergeTime: true });
-    expect(await read("yes, but make the budget ₹900")).toMatchObject({ kind: "correction", target: "budget", budget: 900 });
+    expect(await read("yes but 11am")).toMatchObject({
+      kind: "correction",
+      target: "time_window",
+      mergeTime: true,
+    });
+    expect(await read("yes, but make the budget ₹900")).toMatchObject({
+      kind: "correction",
+      target: "budget",
+      budget: 900,
+    });
   });
 
   it("a yes with words we can't read is not an approval either", async () => {

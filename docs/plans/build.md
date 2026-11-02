@@ -381,7 +381,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U30 Drop a request and switch tasks
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/task-switch.flow.test.ts` (drop wording per intent with `lastRunToolCalls: []`; switch ask holds `task_switch` in `pending_question` on the old row; yes abandons + starts; no keeps; cancel ask; card-open refused (R9); correction while `executing` → `CHANGE_REFUSED_IN_FLIGHT`; switch while executing waits; abandoned row never rewritten), `model-v1.test.ts` drop/cancel phrase table. Bug fixed: `saveWorkflow`'s UPDATE matched `conversation_id + version` — two workflows at the same version were rewritten together; now matches by row id. Eval 22. Suite 256/256, client 21/21, evals 25/25. QA `/tmp/verify-U30/drive.txt`: asks before switching for cancel and reschedule, "no" keeps the booking task, "yes" switches, "never mind" drops with no tool call, bookings untouched.
 - **Depends on.** U28.
 - **Covers.** FR-15, FR-16, V-10, R9 (pending question).
 - **Build.** "never mind", "stop", "forget it", "cancel that" → `abandoned`, "Okay, dropped. Nothing was booked." "cancel my AC servicing" → cancel flow. Unclear → ask. A new request mid-workflow asks before dropping, using the pending question. During `executing` the switch waits.

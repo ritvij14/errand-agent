@@ -237,14 +237,18 @@ export const runScenario = async (
       }
       if (step.phase) {
         const row = db
-          .prepare(`SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`)
+          .prepare(
+            `SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+          )
           .get(conversationId) as { phase: string } | undefined;
         if (row?.phase !== step.phase)
           recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
       }
       if (step.facts) {
         const row = db
-          .prepare(`SELECT facts FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`)
+          .prepare(
+            `SELECT facts FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+          )
           .get(conversationId) as { facts: string } | undefined;
         const stored = JSON.parse(row?.facts ?? "{}") as Record<string, { value: unknown }>;
         for (const [key, value] of Object.entries(step.facts)) {

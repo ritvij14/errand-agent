@@ -166,6 +166,26 @@ const nameOf = (w: WorkflowRow, providerId: string): string =>
 const rupees = (n: number): string => `₹${n.toLocaleString("en-IN")}`;
 
 const CHANGE_VERB = { cancel: "cancel", reschedule: "move" } as const;
+const DROP_REPLY = {
+  book: "Okay, dropped. Nothing was booked.",
+  reschedule: "Okay, dropped. Nothing was changed.",
+  cancel: "Okay, dropped. Your booking is unchanged.",
+} as const;
+
+/** FR-15 ask wording: what the current task is ("booking the plumber"). */
+const taskLabel = (intent: WorkflowRow["intent"], service: string | null): string =>
+  intent === "book"
+    ? `booking ${service ? `the ${service}` : "an errand"}`
+    : intent === "cancel"
+      ? `cancelling ${service ? `the ${SERVICE_NAMES[service] ?? service} booking` : "your booking"}`
+      : `moving ${service ? `the ${SERVICE_NAMES[service] ?? service} booking` : "your booking"}`;
+
+/** FR-15 ask wording: what the new request would be ("cancel the AC servicing"). */
+const newRequestLabel = (intent: "book" | "cancel" | "reschedule", service: string | null): string => {
+  if (intent === "book")
+    return `book ${service ? (/^[aeiou]/i.test(service) ? "an" : "a") + ` ${service}` : "a new request"}`;
+  return `${intent === "cancel" ? "cancel" : "move"} ${service ? `the ${SERVICE_NAMES[service] ?? service}` : ""}`.trim();
+};
 
 /** One row of a `bookings_list` part (FR-5): what the page shows for a booking. */
 const listItem = (b: BookingRecord) => ({
@@ -290,8 +310,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     next.updatedAt = nowMs();
     const result = db
       .prepare(
+        // by id: version alone ties whenever an older workflow (e.g. abandoned by a
+        // task switch) reached the same version — one update would rewrite both rows
         `UPDATE workflow SET intent = ?, phase = ?, facts = ?, candidates = ?, selection = ?, hold = ?, target_booking_id = ?, pending_question = ?, version = version + 1, updated_at = ?
-         WHERE conversation_id = ? AND version = ?`,
+         WHERE id = ?`,
       )
       .run(
         next.intent,
@@ -303,8 +325,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         next.target_booking_id,
         next.pending_question,
         nowMs(),
-        conversationId,
-        expectedVersion,
+        existing!.id,
       );
     if (result.changes === 0) return { ok: false };
     if (existing!.phase !== next.phase)
@@ -312,7 +333,211 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return { ok: true, workflow: getActive(conversationId) };
   };
 
+  /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
+  const applyUserText = async (
+    userId: string,
+    conversationId: string,
+    text: string,
+    approvalId?: string,
+  ): Promise<ApplyOutcome> => {
+    const active = getActive(conversationId);
+    const shown =
+      active?.phase === "choosing" ? ((active.candidates as OptionBlock[] | null) ?? undefined) : undefined;
+    const readJob = { text, waitingFor: active?.phase ?? "nothing", clock, options: shown };
+    let read: ReadResult = await (runModel ?? model).read(readJob);
+    // an unusable read is read again; the model-call cap stops a model that never gives one
+    while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
+
+    if (read.kind === "list_bookings") return listMyBookings(active);
+    if (read.kind === "cancel") return startChange("cancel", userId, conversationId, active, text);
+    if (read.kind === "reschedule")
+      return startChange("reschedule", userId, conversationId, active, text, read.timeWindow);
+    if (active?.pending_question && read.kind === "decision") {
+      const pending = JSON.parse(active.pending_question) as { type?: string; text?: string };
+      if (pending.type === "task_switch" && !approvals.getOpen(active.id)) {
+        const ended = saveWorkflow(conversationId, active.version, (w) => ({
+          ...w,
+          phase: pending.text && read.decision === "yes" ? "abandoned" : w.phase,
+          pending_question: null,
+        }));
+        if (read.decision === "yes" && pending.text) {
+          trace?.record("state_transition", {
+            fromPhase: active.phase,
+            toPhase: "abandoned",
+            reason: "task switch confirmed",
+          });
+          void ended;
+          return applyUserText(userId, conversationId, pending.text);
+        }
+        const again = replyFor((ended.workflow ?? active) as WorkflowRow);
+        return {
+          phase: again.phase,
+          reply: again.reply || "Okay, keeping your current request.",
+          facts: again.facts,
+          code: again.code,
+        };
+      }
+    }
+    if (active?.phase === "identifying_booking" && read.kind !== "drop") return identifyTarget(active, text);
+
+    if (read.kind === "pick" || read.kind === "pick_unclear") {
+      if (!active || !shown?.length) {
+        return {
+          phase: active?.phase ?? "collecting",
+          reply: "There's no list of options to pick from right now.",
+          code: "NOTHING_TO_PICK",
+          facts: active?.facts ?? ({} as Facts),
+        };
+      }
+      const chosen =
+        read.kind === "pick"
+          ? shown.find((b) => b.provider.id === read.providerId && b.slots.some((s) => s.start === read.slot))
+          : undefined;
+      if (read.kind === "pick_unclear" || !chosen) {
+        return {
+          ...optionsOutcome(
+            active,
+            "Which slot? Tap one and press Confirm, or tell me the provider and the time.",
+          ),
+          code: read.kind === "pick" ? "NOTHING_TO_PICK" : undefined,
+        };
+      }
+      const saved = saveWorkflow(conversationId, active.version, (w) => ({
+        ...w,
+        selection: { providerId: read.providerId, slot: read.slot },
+        phase: "holding",
+      }));
+      if (!saved.ok || !saved.workflow)
+        return { phase: active.phase, reply: "", code: "unknown_error", facts: active.facts };
+      return advance(saved.workflow);
+    }
+
+    if (active?.phase === "awaiting_approval") {
+      // § 2.5.5 rule 1: a typed yes answers the card it carries, else the one waiting
+      if (read.kind === "decision")
+        return decideOn(active, approvalId, read.decision === "yes" ? "approve" : "decline", "typed");
+      if (read.kind === "unknown") {
+        const open = approvals.getOpen(active.id);
+        if (open)
+          return cardOutcome(active, open, "I didn't catch that — approve or decline the booking below.");
+      }
+    }
+
+    if (read.kind === "decision" && read.decision === "yes") {
+      const used = approvals.lastUsed(conversationId);
+      if (used) return reportUsed(used); // § 2.5.6 repeated yes: no second call
+    }
+
+    if (read.kind === "unknown" || read.kind === "decision") {
+      // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
+      const phase = getActive(conversationId)?.phase ?? "collecting";
+      return {
+        phase,
+        reply: "",
+        code: "NOT_UNDERSTOOD",
+        facts: getActive(conversationId)?.facts ?? ({} as Facts),
+      };
+    }
+
+    if (read.kind === "drop") {
+      const current = getActive(conversationId);
+      if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+      voidOpenApproval(current, "user_dropped");
+      const saved = saveWorkflow(conversationId, current.version, (w) => ({
+        ...w,
+        phase: "abandoned",
+        pending_question: null,
+      }));
+      trace?.record("state_transition", {
+        fromPhase: current.phase,
+        toPhase: "abandoned",
+        reason: "user dropped",
+      });
+      return {
+        phase: "abandoned",
+        reply: DROP_REPLY[(current.intent ?? "book") as keyof typeof DROP_REPLY],
+        facts: {} as Facts,
+        code: saved.ok ? undefined : "unknown_error",
+      };
+    }
+
+    const current = getActive(conversationId);
+
+    if (current) {
+      // a bare time/budget answer reads as a book request too — only an explicit service starts a new one
+      if (read.kind === "workflow" && read.intent && read.service && read.intent !== current.intent)
+        return askBeforeSwitch(current, read.intent, read.service, text);
+      return applyToWorkflow(conversationId, current, read);
+    }
+
+    const intent = read.kind === "workflow" ? read.intent : undefined;
+    if (!intent) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+    const flags = read as { unknownService?: boolean; unknownArea?: boolean; timeOutOfRange?: boolean };
+    if (flags.unknownService)
+      return {
+        phase: "collecting",
+        reply:
+          "I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?",
+        code: "UNKNOWN_SERVICE",
+        facts: {} as Facts,
+      };
+    if (flags.unknownArea)
+      return {
+        phase: "collecting",
+        reply: "I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?",
+        code: "UNKNOWN_AREA",
+        facts: {} as Facts,
+      };
+    const facts: Facts = {};
+    const values = read as {
+      service?: string | null;
+      area?: string | null;
+      budget?: number | "any";
+      preferences?: string | null;
+      timeWindow?: TimeWindow;
+    };
+    if (values.service) facts.service = fact("service", values.service);
+    if (values.area) facts.area = fact("area", values.area);
+    if (values.timeWindow)
+      facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
+    if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
+    if (values.preferences) facts.preferences = fact("preferences", values.preferences);
+
+    const saved = saveWorkflow(conversationId, -1, (w) => ({
+      ...w,
+      user_id: userId,
+      intent,
+      facts: { ...w.facts, ...facts },
+      phase: nextPhase({ ...w.facts, ...facts }),
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
+    for (const [key, f] of Object.entries(saved.workflow.facts)) {
+      trace?.record("fact_changed", {
+        key,
+        oldValue: null,
+        newValue: (f as Fact).value,
+        source: "user",
+        isCorrection: false,
+      });
+    }
+    trace?.record("state_transition", {
+      fromPhase: "none",
+      toPhase: saved.workflow.phase,
+      reason: "workflow started",
+    });
+    return flags.timeOutOfRange
+      ? {
+          phase: saved.workflow.phase,
+          reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.",
+          facts: saved.workflow.facts,
+          code: TIME_OUT_OF_RANGE,
+        }
+      : advance(saved.workflow);
+  };
+
   return {
+    applyUserText,
     getActiveWorkflow: getActive,
     currentVersion: (conversationId: string): number => getActive(conversationId)?.version ?? -1,
     saveWorkflow,
@@ -327,190 +552,6 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       runModel = run?.model;
     },
 
-    /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
-    applyUserText: async (
-      userId: string,
-      conversationId: string,
-      text: string,
-      approvalId?: string,
-    ): Promise<ApplyOutcome> => {
-      const active = getActive(conversationId);
-      const shown =
-        active?.phase === "choosing" ? ((active.candidates as OptionBlock[] | null) ?? undefined) : undefined;
-      const readJob = { text, waitingFor: active?.phase ?? "nothing", clock, options: shown };
-      let read: ReadResult = await (runModel ?? model).read(readJob);
-      // an unusable read is read again; the model-call cap stops a model that never gives one
-      while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
-
-      if (read.kind === "list_bookings") return listMyBookings(active);
-      if (read.kind === "cancel") return startChange("cancel", userId, conversationId, active, text);
-      if (read.kind === "reschedule") return startChange("reschedule", userId, conversationId, active, text, read.timeWindow);
-      if (active?.phase === "identifying_booking" && read.kind !== "drop") return identifyTarget(active, text);
-
-      if (read.kind === "pick" || read.kind === "pick_unclear") {
-        if (!active || !shown?.length) {
-          return {
-            phase: active?.phase ?? "collecting",
-            reply: "There's no list of options to pick from right now.",
-            code: "NOTHING_TO_PICK",
-            facts: active?.facts ?? ({} as Facts),
-          };
-        }
-        const chosen =
-          read.kind === "pick"
-            ? shown.find(
-                (b) => b.provider.id === read.providerId && b.slots.some((s) => s.start === read.slot),
-              )
-            : undefined;
-        if (read.kind === "pick_unclear" || !chosen) {
-          return {
-            ...optionsOutcome(
-              active,
-              "Which slot? Tap one and press Confirm, or tell me the provider and the time.",
-            ),
-            code: read.kind === "pick" ? "NOTHING_TO_PICK" : undefined,
-          };
-        }
-        const saved = saveWorkflow(conversationId, active.version, (w) => ({
-          ...w,
-          selection: { providerId: read.providerId, slot: read.slot },
-          phase: "holding",
-        }));
-        if (!saved.ok || !saved.workflow)
-          return { phase: active.phase, reply: "", code: "unknown_error", facts: active.facts };
-        return advance(saved.workflow);
-      }
-
-      if (active?.phase === "awaiting_approval") {
-        // § 2.5.5 rule 1: a typed yes answers the card it carries, else the one waiting
-        if (read.kind === "decision")
-          return decideOn(active, approvalId, read.decision === "yes" ? "approve" : "decline", "typed");
-        if (read.kind === "unknown") {
-          const open = approvals.getOpen(active.id);
-          if (open)
-            return cardOutcome(active, open, "I didn't catch that — approve or decline the booking below.");
-        }
-      }
-
-      if (read.kind === "decision" && read.decision === "yes") {
-        const used = approvals.lastUsed(conversationId);
-        if (used) return reportUsed(used); // § 2.5.6 repeated yes: no second call
-      }
-
-      if (read.kind === "unknown" || read.kind === "decision") {
-        // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
-        const phase = getActive(conversationId)?.phase ?? "collecting";
-        return {
-          phase,
-          reply: "",
-          code: "NOT_UNDERSTOOD",
-          facts: getActive(conversationId)?.facts ?? ({} as Facts),
-        };
-      }
-
-      if (read.kind === "drop") {
-        const current = getActive(conversationId);
-        if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
-        voidOpenApproval(current, "user_dropped");
-        const saved = saveWorkflow(conversationId, current.version, (w) => ({
-          ...w,
-          phase: "abandoned",
-          pending_question: null,
-        }));
-        trace?.record("state_transition", {
-          fromPhase: current.phase,
-          toPhase: "abandoned",
-          reason: "user dropped",
-        });
-        return {
-          phase: "abandoned",
-          reply: "Okay, dropped. Nothing was booked.",
-          facts: {} as Facts,
-          code: saved.ok ? undefined : "unknown_error",
-        };
-      }
-
-      const current = getActive(conversationId);
-
-      if (current) {
-        if (
-          read.kind === "workflow" &&
-          read.intent &&
-          read.intent !== current.intent &&
-          current.phase !== "collecting"
-        ) {
-          // FR-15: switching tasks on an unfinished workflow asks first (U30); until
-          // then record that the intent stayed
-        }
-        return applyToWorkflow(conversationId, current, read);
-      }
-
-      const intent = read.kind === "workflow" ? read.intent : undefined;
-      if (!intent) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
-      const flags = read as { unknownService?: boolean; unknownArea?: boolean; timeOutOfRange?: boolean };
-      if (flags.unknownService)
-        return {
-          phase: "collecting",
-          reply:
-            "I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?",
-          code: "UNKNOWN_SERVICE",
-          facts: {} as Facts,
-        };
-      if (flags.unknownArea)
-        return {
-          phase: "collecting",
-          reply: "I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?",
-          code: "UNKNOWN_AREA",
-          facts: {} as Facts,
-        };
-      const facts: Facts = {};
-      const values = read as {
-        service?: string | null;
-        area?: string | null;
-        budget?: number | "any";
-        preferences?: string | null;
-        timeWindow?: TimeWindow;
-      };
-      if (values.service) facts.service = fact("service", values.service);
-      if (values.area) facts.area = fact("area", values.area);
-      if (values.timeWindow)
-        facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
-      if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
-      if (values.preferences) facts.preferences = fact("preferences", values.preferences);
-
-      const saved = saveWorkflow(conversationId, -1, (w) => ({
-        ...w,
-        user_id: userId,
-        intent,
-        facts: { ...w.facts, ...facts },
-        phase: nextPhase({ ...w.facts, ...facts }),
-      }));
-      if (!saved.ok || !saved.workflow)
-        return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
-      for (const [key, f] of Object.entries(saved.workflow.facts)) {
-        trace?.record("fact_changed", {
-          key,
-          oldValue: null,
-          newValue: (f as Fact).value,
-          source: "user",
-          isCorrection: false,
-        });
-      }
-      trace?.record("state_transition", {
-        fromPhase: "none",
-        toPhase: saved.workflow.phase,
-        reason: "workflow started",
-      });
-      return flags.timeOutOfRange
-        ? {
-            phase: saved.workflow.phase,
-            reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.",
-            facts: saved.workflow.facts,
-            code: TIME_OUT_OF_RANGE,
-          }
-        : advance(saved.workflow);
-    },
-
     /**
      * § 2.5.2 rule 5 / § 2.5.6 restart recovery: a workflow still `executing` / `verifying`
      * was cut off mid-booking. Finish it before anything else; undefined when nothing is.
@@ -522,7 +563,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (op && op.kind !== "book") {
         // § 2.5.6: retry only while the approval is fresh (10 min, like a hold); else just read the booking
         const fresh = nowMs() - approvals.getById(op.approval_id)!.created_at < APPROVAL_MAX_AGE_MS;
-        return fresh ? executeChangeOp(w, op) : settleChangeByList(w, op, "The server restarted before your change finished.");
+        return fresh
+          ? executeChangeOp(w, op)
+          : settleChangeByList(w, op, "The server restarted before your change finished.");
       }
       return op ? recoverOperation(w, op) : undefined;
     },
@@ -536,7 +579,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     afterUnknownError: (conversationId: string): string => {
       const w = getActive(conversationId);
       const op = w ? operations.inFlightFor(w.id) : undefined;
-      if (!w || !op) return "Something went wrong on our side, so I stopped. Nothing was booked or changed — please send that again.";
+      if (!w || !op)
+        return "Something went wrong on our side, so I stopped. Nothing was booked or changed — please send that again.";
       if (op.kind !== "book") {
         return (
           settleChangeByList(w, op, "Something went wrong on our side.")?.reply ??
@@ -549,10 +593,21 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       } catch {
         checked = undefined; // unreadable — including a cap hit on the check itself
       }
-      if (checked?.ok && checked.data.status === "booked" && checked.data.bookingId) return finishFoundBooking(w, op, checked.data.bookingId).reply;
+      if (checked?.ok && checked.data.status === "booked" && checked.data.bookingId)
+        return finishFoundBooking(w, op, checked.data.bookingId).reply;
       if (checked?.ok && (checked.data.status === "not_found" || checked.data.status === "failed")) {
-        operations.finish(op.id, "failed", { error: "unknown_error", checkedStatus: checked.data.status }, nowMs());
-        trace?.record("operation_event", { event: "failed", kind: "book", key: op.idempotency_key, result: checked.data.status });
+        operations.finish(
+          op.id,
+          "failed",
+          { error: "unknown_error", checkedStatus: checked.data.status },
+          nowMs(),
+        );
+        trace?.record("operation_event", {
+          event: "failed",
+          kind: "book",
+          key: op.idempotency_key,
+          result: checked.data.status,
+        });
         saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "failed" }));
         return "Something went wrong on our side. Nothing was booked — ask me to try again.";
       }
@@ -583,6 +638,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   };
 
   function applyToWorkflow(conversationId: string, current: WorkflowRow, read: ReadResult): ApplyOutcome {
+    if (
+      (current.phase === "executing" || current.phase === "verifying") &&
+      (read.kind === "workflow" || read.kind === "correction")
+    ) {
+      return {
+        phase: current.phase,
+        reply: "I can't change it while I'm confirming the booking — I'll be right with you.",
+        facts: current.facts,
+        code: "CHANGE_REFUSED_IN_FLIGHT",
+      };
+    }
     const facts: Facts = { ...current.facts };
     let errorCode: string | undefined;
     let factChanged = false;
@@ -695,7 +761,12 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       : {};
     const cancel = record.action === "cancel";
     if (record.action === "reschedule" && op?.status === "succeeded") {
-      return { phase: w.phase, reply: `Already moved: ${what}. Booking id: ${record.booking_id}. I didn't send it again.`, facts: w.facts, code: "APPROVAL_ALREADY_USED" };
+      return {
+        phase: w.phase,
+        reply: `Already moved: ${what}. Booking id: ${record.booking_id}. I didn't send it again.`,
+        facts: w.facts,
+        code: "APPROVAL_ALREADY_USED",
+      };
     }
     const reply =
       op?.status === "succeeded"
@@ -757,9 +828,21 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (nowMs() - target.created_at > APPROVAL_MAX_AGE_MS) {
       voidOpenApproval(w, "expired");
       if (w.intent === "cancel") {
-        const again = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "identifying_booking" }));
-        if (!again.ok || !again.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-        return { ...identifyTarget(again.workflow, "", target.booking_id ?? undefined, "That approval expired after 10 minutes, so I checked again. "), code: "APPROVAL_STALE" };
+        const again = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+          ...wf,
+          phase: "identifying_booking",
+        }));
+        if (!again.ok || !again.workflow)
+          return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+        return {
+          ...identifyTarget(
+            again.workflow,
+            "",
+            target.booking_id ?? undefined,
+            "That approval expired after 10 minutes, so I checked again. ",
+          ),
+          code: "APPROVAL_STALE",
+        };
       }
       const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
         ...wf,
@@ -797,26 +880,51 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         target.action === "cancel"
           ? startCancelOperation(db, clock, target.id, { bookingId: target.booking_id! }, toExecuting)
           : target.action === "reschedule"
-            ? startRescheduleOperation(db, clock, target.id, { bookingId: target.booking_id!, newSlot: target.slot }, toExecuting)
+            ? startRescheduleOperation(
+                db,
+                clock,
+                target.id,
+                { bookingId: target.booking_id!, newSlot: target.slot },
+                toExecuting,
+              )
             : startBookOperation(
-              db,
-              clock,
-              target.id,
-              { providerId: target.provider_id, slot: target.slot, price: target.price, holdId: w.hold?.holdId ?? "" },
-              toExecuting,
-            );
+                db,
+                clock,
+                target.id,
+                {
+                  providerId: target.provider_id,
+                  slot: target.slot,
+                  price: target.price,
+                  holdId: w.hold?.holdId ?? "",
+                },
+                toExecuting,
+              );
       if (!started.ok && started.reason.includes("in progress")) {
         // R3: another conversation is already changing this booking
-        return { phase: w.phase, reply: "Another change to this booking is already in progress, so I didn't do anything. Ask me again in a moment.", facts: w.facts, code: "BOOKING_IN_FLIGHT" };
+        return {
+          phase: w.phase,
+          reply:
+            "Another change to this booking is already in progress, so I didn't do anything. Ask me again in a moment.",
+          facts: w.facts,
+          code: "BOOKING_IN_FLIGHT",
+        };
       }
       if (!started.ok || !moved) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-      trace?.record("operation_event", { event: "created", kind: target.action, key: started.operation.idempotency_key });
+      trace?.record("operation_event", {
+        event: "created",
+        kind: target.action,
+        key: started.operation.idempotency_key,
+      });
       return advance(moved);
     }
     if (w.intent === "cancel") {
       // R9: declining a cancel ends it — the booking stays
       const ended = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "abandoned" }));
-      return { phase: "abandoned", reply: "Okay — I kept your booking. Nothing was cancelled.", facts: (ended.workflow ?? w).facts };
+      return {
+        phase: "abandoned",
+        reply: "Okay — I kept your booking. Nothing was cancelled.",
+        facts: (ended.workflow ?? w).facts,
+      };
     }
     // R9: decline goes back by intent — a booking returns to the same options
     const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
@@ -866,10 +974,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    */
   function awaitApproval(w: WorkflowRow, held: Held, reply?: string): ApplyOutcome {
     const selection = w.selection!;
-    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.price;
+    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)
+      ?.provider.price;
     return openApproval(
       w,
-      { action: "book", provider_id: selection.providerId, slot: selection.slot, price: held.quotedPrice, hold_id: held.holdId }, // V-2: the quoted price
+      {
+        action: "book",
+        provider_id: selection.providerId,
+        slot: selection.slot,
+        price: held.quotedPrice,
+        hold_id: held.holdId,
+      }, // V-2: the quoted price
       { hold: held },
       nameOf(w, selection.providerId),
       (record) =>
@@ -893,14 +1008,28 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     reply: (record: ApprovalRecord) => string,
   ): ApplyOutcome {
     const result = db.transaction(() => {
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, ...patch, phase: "awaiting_approval" }));
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+        ...wf,
+        ...patch,
+        phase: "awaiting_approval",
+      }));
       if (!saved.ok || !saved.workflow) return undefined;
-      const record = approvals.createPending({ user_id: w.user_id, conversation_id: w.conversation_id, workflow_id: w.id, ...input }, nowMs());
+      const record = approvals.createPending(
+        { user_id: w.user_id, conversation_id: w.conversation_id, workflow_id: w.id, ...input },
+        nowMs(),
+      );
       return { workflow: saved.workflow, record };
     })();
     if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     const { record } = result;
-    trace?.record("approval_event", { approvalId: record.id, event: "created", action: record.action, providerId: record.provider_id, slot: record.slot, price: record.price });
+    trace?.record("approval_event", {
+      approvalId: record.id,
+      event: "created",
+      action: record.action,
+      providerId: record.provider_id,
+      slot: record.slot,
+      price: record.price,
+    });
     return {
       phase: "awaiting_approval",
       reply: reply(record),
@@ -987,7 +1116,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const phase = active?.phase ?? "none";
     const facts = active?.facts ?? ({} as Facts);
     const result = list!();
-    if (!result.ok) return { phase, reply: "I couldn't read your bookings just now — please ask again.", facts, code: result.error };
+    if (!result.ok)
+      return {
+        phase,
+        reply: "I couldn't read your bookings just now — please ask again.",
+        facts,
+        code: result.error,
+      };
     const bookings = result.data.bookings.map(listItem);
     const reply = bookings.length
       ? `You have ${bookings.length} booking${bookings.length === 1 ? "" : "s"} — upcoming and past are below.`
@@ -1000,6 +1135,46 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * A request already in progress is never dropped silently — the user drops it first
    * (asking comes with U30).
    */
+  /**
+   * FR-15: a different request on an unfinished workflow asks before dropping it. R9:
+   * with an approval card open the question would stack, so the card is resolved first;
+   * while `executing` / `verifying` the switch waits for the outcome. Otherwise the
+   * question is stored — a plain "yes" drops the current request and starts the new one.
+   */
+  function askBeforeSwitch(
+    current: WorkflowRow,
+    intent: "book" | "cancel" | "reschedule",
+    newService: string | null,
+    text: string,
+  ): ApplyOutcome {
+    if (current.phase === "executing" || current.phase === "verifying") {
+      return {
+        phase: current.phase,
+        reply: "I'm still confirming the booking — I'll ask about the new request once that's done.",
+        facts: current.facts,
+        code: "TASK_IN_PROGRESS",
+      };
+    }
+    if (approvals.getOpen(current.id))
+      return {
+        phase: current.phase,
+        reply: "Please approve or decline the card above first — then send the new request again.",
+        facts: current.facts,
+        code: "TASK_IN_PROGRESS",
+      };
+    const saved = saveWorkflow(current.conversation_id, current.version, (w) => ({
+      ...w,
+      pending_question: JSON.stringify({ type: "task_switch", text, intent }),
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
+    return {
+      phase: current.phase,
+      reply: `You haven't finished ${taskLabel(current.intent, typeof current.facts.service?.value === "string" ? current.facts.service.value : null)}. Drop it and ${newRequestLabel(intent, newService)}?`,
+      facts: current.facts,
+    };
+  }
+
   function startChange(
     intent: "cancel" | "reschedule",
     userId: string,
@@ -1009,17 +1184,29 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     timeWindow?: TimeWindow,
   ): ApplyOutcome {
     if (active) {
+      if (active.intent !== intent) return askBeforeSwitch(active, intent, findService(text).service, text);
       return {
         phase: active.phase,
-        reply: `You have a request in progress — say “never mind” to drop it first, then ask me to ${CHANGE_VERB[intent]} it.`,
+        reply: `A ${CHANGE_VERB[intent]} request is already in progress — say “never mind” to drop it first, then send it again.`,
         facts: active.facts,
         code: "TASK_IN_PROGRESS",
       };
     }
     const facts = (timeWindow ? { time_window: fact("time_window", timeWindow) } : {}) as Facts;
-    const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts, phase: "identifying_booking" }));
-    if (!saved.ok || !saved.workflow) return { phase: "none", reply: "", code: "unknown_error", facts: {} as Facts };
-    trace?.record("state_transition", { fromPhase: "none", toPhase: "identifying_booking", reason: "workflow started" });
+    const saved = saveWorkflow(conversationId, -1, (w) => ({
+      ...w,
+      user_id: userId,
+      intent,
+      facts,
+      phase: "identifying_booking",
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: "none", reply: "", code: "unknown_error", facts: {} as Facts };
+    trace?.record("state_transition", {
+      fromPhase: "none",
+      toPhase: "identifying_booking",
+      reason: "workflow started",
+    });
     return identifyTarget(saved.workflow, text);
   }
 
@@ -1033,7 +1220,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   function identifyTarget(w: WorkflowRow, text: string, bookingId?: string, lead = ""): ApplyOutcome {
     const verb = CHANGE_VERB[w.intent as "cancel" | "reschedule"];
     const listed = list!();
-    if (!listed.ok) return { phase: w.phase, reply: "I couldn't read your bookings just now — please try again.", facts: w.facts, code: listed.error };
+    if (!listed.ok)
+      return {
+        phase: w.phase,
+        reply: "I couldn't read your bookings just now — please try again.",
+        facts: w.facts,
+        code: listed.error,
+      };
     const upcoming = listed.data.bookings.filter((b) => b.status === "booked");
     const matches = bookingId ? upcoming.filter((b) => b.id === bookingId) : matchBookings(upcoming, text);
     if (matches.length !== 1) {
@@ -1052,11 +1245,18 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     }
     const b = matches[0]!;
     if (w.intent === "cancel") {
-      const target: OptionBlock = { provider: { id: b.providerId, name: b.providerName, rating: 0, price: b.price }, slots: [] };
+      const target: OptionBlock = {
+        provider: { id: b.providerId, name: b.providerName, rating: 0, price: b.price },
+        slots: [],
+      };
       return openApproval(
         w,
         { action: "cancel", provider_id: b.providerId, slot: b.slot, price: b.price, booking_id: b.id },
-        { target_booking_id: b.id, candidates: [target], selection: { providerId: b.providerId, slot: b.slot } },
+        {
+          target_booking_id: b.id,
+          candidates: [target],
+          selection: { providerId: b.providerId, slot: b.slot },
+        },
         b.providerName,
         () => `${lead}Here are the details — approve to cancel this booking, or decline.`,
       );
@@ -1067,7 +1267,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       facts: { ...wf.facts, service: fact("service", b.service), area: fact("area", b.area) },
       phase: wf.facts.time_window ? "searching" : "collecting",
     }));
-    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     if (saved.workflow.phase === "collecting") {
       return {
         phase: "collecting",
@@ -1085,28 +1286,58 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    */
   function searchReschedule(w: WorkflowRow, justRead?: BookingRecord): ApplyOutcome {
     const listed = justRead ? undefined : list!();
-    const b = justRead ?? (listed?.ok ? listed.data.bookings.find((x) => x.id === w.target_booking_id && x.status === "booked") : undefined);
+    const b =
+      justRead ??
+      (listed?.ok
+        ? listed.data.bookings.find((x) => x.id === w.target_booking_id && x.status === "booked")
+        : undefined);
     if (!b) {
       const ended = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "failed" }));
-      return { phase: "failed", reply: "That booking isn't upcoming any more, so there's nothing to move.", facts: (ended.workflow ?? w).facts, code: "BOOKING_NOT_FOUND" };
+      return {
+        phase: "failed",
+        reply: "That booking isn't upcoming any more, so there's nothing to move.",
+        facts: (ended.workflow ?? w).facts,
+        code: "BOOKING_NOT_FOUND",
+      };
     }
     const timeWindow = w.facts.time_window!.value!;
     const found = search!({ service: b.service, area: b.area, ...searchRange(timeWindow, clock) });
-    if (!found.ok) return { phase: w.phase, reply: "I couldn't reach the provider service just now — try again in a moment.", facts: w.facts, code: found.error };
+    if (!found.ok)
+      return {
+        phase: w.phase,
+        reply: "I couldn't reach the provider service just now — try again in a moment.",
+        facts: w.facts,
+        code: found.error,
+      };
     const options = buildOptions(found.data.providers, { timeWindow, budget: undefined });
     const blocks = (options.ok ? options.blocks : [])
       .filter((x) => x.provider.id === b.providerId)
       .map((x) => ({
         provider: { ...x.provider, price: b.price },
-        slots: x.slots.filter((s) => s.start !== b.slot).map((s) => ({ ...s, pickText: movePickText(b.providerName, s.start) })),
+        slots: x.slots
+          .filter((s) => s.start !== b.slot)
+          .map((s) => ({ ...s, pickText: movePickText(b.providerName, s.start) })),
       }))
       .filter((x) => x.slots.length > 0);
-    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: blocks, phase: blocks.length ? "choosing" : "searching" }));
-    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      candidates: blocks,
+      phase: blocks.length ? "choosing" : "searching",
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     if (!blocks.length) {
-      return { phase: "searching", reply: `${b.providerName} has no free slot in that time — want to try another day or time?`, facts: saved.workflow.facts, code: "NO_MATCHES" };
+      return {
+        phase: "searching",
+        reply: `${b.providerName} has no free slot in that time — want to try another day or time?`,
+        facts: saved.workflow.facts,
+        code: "NO_MATCHES",
+      };
     }
-    return optionsOutcome(saved.workflow, `${b.providerName} can do these times — tap one and press Confirm. Your price stays ${rupees(b.price)}.`);
+    return optionsOutcome(
+      saved.workflow,
+      `${b.providerName} can do these times — tap one and press Confirm. Your price stays ${rupees(b.price)}.`,
+    );
   }
 
   /** A reschedule has no hold step: the picked slot goes straight to an approval at the booking's price (V-9). */
@@ -1115,7 +1346,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const block = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)!;
     return openApproval(
       w,
-      { action: "reschedule", provider_id: selection.providerId, slot: selection.slot, price: block.provider.price, booking_id: w.target_booking_id! },
+      {
+        action: "reschedule",
+        provider_id: selection.providerId,
+        slot: selection.slot,
+        price: block.provider.price,
+        booking_id: w.target_booking_id!,
+      },
       {},
       block.provider.name,
       () => "Here are the details — approve to move your booking, or decline.",
@@ -1132,7 +1369,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const cancel = op.kind === "cancel";
     const outcome = cancel
       ? executeCancel(db, clock, cancelTools!, op, { providerId: approval.provider_id, slot: approval.slot })
-      : executeReschedule(db, clock, rescheduleTools!, op, { providerId: approval.provider_id, price: approval.price });
+      : executeReschedule(db, clock, rescheduleTools!, op, {
+          providerId: approval.provider_id,
+          price: approval.price,
+        });
     trace?.record("operation_event", {
       event: outcome.ok ? "succeeded" : "failed",
       kind: op.kind,
@@ -1141,12 +1381,28 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     });
     const name = nameOf(w, approval.provider_id);
     if (!outcome.ok && outcome.kind === "slot_conflict") {
-      return showRemaining(w, w.selection!, `That time was just taken at ${name}, so your booking didn't move — here are the other times.`, "slot_conflict");
+      return showRemaining(
+        w,
+        w.selection!,
+        `That time was just taken at ${name}, so your booking didn't move — here are the other times.`,
+        "slot_conflict",
+      );
     }
-    if (!outcome.ok && outcome.kind === "booking_changed" && approvals.voidUsed(approval.id, "booking_changed", nowMs())) {
-      trace?.record("approval_event", { approvalId: approval.id, event: "voided", voidReason: "booking_changed" });
+    if (
+      !outcome.ok &&
+      outcome.kind === "booking_changed" &&
+      approvals.voidUsed(approval.id, "booking_changed", nowMs())
+    ) {
+      trace?.record("approval_event", {
+        approvalId: approval.id,
+        event: "voided",
+        voidReason: "booking_changed",
+      });
     }
-    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: outcome.ok ? "done" : "failed" }));
+    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      phase: outcome.ok ? "done" : "failed",
+    }));
     const facts = (finished.workflow ?? w).facts;
     if (outcome.ok) {
       return {
@@ -1179,7 +1435,11 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * A change whose outcome is unknown (restart with an old approval, or an unknown error):
    * the booking itself says. Undefined when it can't be read.
    */
-  function settleChangeByList(w: WorkflowRow, op: OperationRecord, failedLead: string): ApplyOutcome | undefined {
+  function settleChangeByList(
+    w: WorkflowRow,
+    op: OperationRecord,
+    failedLead: string,
+  ): ApplyOutcome | undefined {
     let listed: ReturnType<ListTool> | undefined;
     try {
       listed = list?.();
@@ -1189,23 +1449,46 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const b = listed?.ok ? listed.data.bookings.find((x) => x.id === op.booking_id) : undefined;
     if (!b) return undefined;
     const { newSlot } = JSON.parse(op.request) as { newSlot?: string };
-    const happened = op.kind === "cancel" ? b.status === "cancelled" : b.status === "booked" && b.slot === newSlot;
+    const happened =
+      op.kind === "cancel" ? b.status === "cancelled" : b.status === "booked" && b.slot === newSlot;
     const what = `${b.providerName} on ${slotLabel(b.slot)}`;
-    operations.finish(op.id, happened ? "succeeded" : "failed", { bookingId: op.booking_id, checkedStatus: b.status }, nowMs());
-    trace?.record("operation_event", { event: happened ? "succeeded" : "failed", kind: op.kind, key: op.idempotency_key, result: b.status });
-    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: happened ? "done" : "failed" }));
+    operations.finish(
+      op.id,
+      happened ? "succeeded" : "failed",
+      { bookingId: op.booking_id, checkedStatus: b.status },
+      nowMs(),
+    );
+    trace?.record("operation_event", {
+      event: happened ? "succeeded" : "failed",
+      kind: op.kind,
+      key: op.idempotency_key,
+      result: b.status,
+    });
+    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      phase: happened ? "done" : "failed",
+    }));
     const facts = (finished.workflow ?? w).facts;
     const change = op.kind === "cancel" ? "cancelled" : "moved";
     return happened
       ? { phase: "done", reply: `Your booking was ${change}: ${what}. Booking id: ${op.booking_id}.`, facts }
-      : { phase: "failed", reply: `${failedLead} Your booking wasn't ${change} — it's still ${what}. Ask me again if you still want to change it.`, facts };
+      : {
+          phase: "failed",
+          reply: `${failedLead} Your booking wasn't ${change} — it's still ${what}. Ask me again if you still want to change it.`,
+          facts,
+        };
   }
 
   /** The provider has the booking though the run never finished it: record it and report it. */
   function finishFoundBooking(w: WorkflowRow, op: OperationRecord, bookingId: string): ApplyOutcome {
     const selection = w.selection!;
     operations.finish(op.id, "succeeded", { bookingId, recovered: true }, nowMs());
-    trace?.record("operation_event", { event: "succeeded", kind: "book", key: op.idempotency_key, result: bookingId });
+    trace?.record("operation_event", {
+      event: "succeeded",
+      kind: "book",
+      key: op.idempotency_key,
+      result: bookingId,
+    });
     const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "done" }));
     return {
       phase: "done",
@@ -1222,7 +1505,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   function recoverOperation(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
     const checked = bookTools!.status(op.idempotency_key);
     const status = checked.ok ? checked.data.status : checked.error;
-    if (checked.ok && status === "booked" && checked.data.bookingId) return finishFoundBooking(w, op, checked.data.bookingId);
+    if (checked.ok && status === "booked" && checked.data.bookingId)
+      return finishFoundBooking(w, op, checked.data.bookingId);
     if (status === "not_found" && (w.hold?.expiresAt ?? 0) > nowMs()) return executeOperation(w);
     const holdRanOut = status === "not_found";
     operations.finish(
