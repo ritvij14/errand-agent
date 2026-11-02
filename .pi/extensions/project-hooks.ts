@@ -1,6 +1,5 @@
-/// <reference path="./pi-coding-agent.d.ts" />
+import type { ExtensionAPI } from "./extension-api";
 import * as fs from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const FLAG_FILE = ".pi/session-changed";
 const STOP_SCRIPT = "scripts/on-session-stop.sh";
