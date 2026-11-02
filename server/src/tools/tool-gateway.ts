@@ -3,7 +3,14 @@ import type { Clock } from "../shared/clock.js";
 import { startTrace, type Trace } from "../tracing/index.js";
 import type { ForcedQueue, WriteOpts } from "./write-tools.js";
 import { book, getBookingStatus, holdSlot } from "./write-tools.js";
-import { getProvider, listBookings, searchProviders, type BookingRecord, type ProviderSummary, type ToolResult } from "./read-tools.js";
+import {
+  getProvider,
+  listBookings,
+  searchProviders,
+  type BookingRecord,
+  type ProviderSummary,
+  type ToolResult,
+} from "./read-tools.js";
 
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
 
@@ -45,7 +52,9 @@ export type CreateGatewayOpts = {
   toolsUsed?: number;
   /** Gate 2 (§ 2.5.5): may this exact write call run? */
   authorizeWrite?: (tool: string, args: Record<string, unknown>) => boolean;
-  broken?: { listBookings?: (db: Db, opts: WriteOpts, userId: string) => ToolResult<{ bookings: BookingRecord[] }> };
+  broken?: {
+    listBookings?: (db: Db, opts: WriteOpts, userId: string) => ToolResult<{ bookings: BookingRecord[] }>;
+  };
 };
 
 export type ProviderDetails = {
@@ -71,14 +80,26 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
     forced: { take: (tool, nth) => forced.take(tool, nth) },
   };
 
-  const budgeted = <T>(tool: string, args: Record<string, unknown>, call: () => ToolResult<T>, shape: (data: T) => boolean): ToolResult<T> => {
+  const budgeted = <T>(
+    tool: string,
+    args: Record<string, unknown>,
+    call: () => ToolResult<T>,
+    shape: (data: T) => boolean,
+  ): ToolResult<T> => {
     if (used >= TOOL_CALL_CAP) {
       return { ok: false, error: "CAP_TOOL_CALLS", transient: false }; // refused before the call
     }
     used += 1;
     const raw = call();
     if (raw.ok && !shape(raw.data)) {
-      trace.record("tool_call", { tool, args, attempt: 1, ok: false, errorCode: "PROVIDER_BAD_RESPONSE", transient: false });
+      trace.record("tool_call", {
+        tool,
+        args,
+        attempt: 1,
+        ok: false,
+        errorCode: "PROVIDER_BAD_RESPONSE",
+        transient: false,
+      });
       return { ok: false, error: "PROVIDER_BAD_RESPONSE", transient: false };
     }
     let suspectedInjection: boolean | undefined;
@@ -107,26 +128,56 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
 
   return {
     toolCallsUsed: (): number => used,
-    searchProviders: (args: { service: string; area: string; from: string; to: string }): ToolResult<{ providers: ProviderSummary[] }> =>
+    searchProviders: (args: {
+      service: string;
+      area: string;
+      from: string;
+      to: string;
+    }): ToolResult<{ providers: ProviderSummary[] }> =>
       budgeted(
         "search_providers",
         { ...args },
         () => searchProviders(db, toolOpts, args),
-        (d) => Array.isArray(d.providers) && d.providers.every((p) => typeof p?.id === "string" && Array.isArray(p.slots)),
+        (d) =>
+          Array.isArray(d.providers) &&
+          d.providers.every((p) => typeof p?.id === "string" && Array.isArray(p.slots)),
       ),
     getProvider: (providerId: string): ToolResult<ProviderDetails> =>
-      budgeted("get_provider", { providerId }, () => getProvider(db, toolOpts, providerId) as ToolResult<ProviderDetails>, (d) => Array.isArray(d.reviews)),
+      budgeted(
+        "get_provider",
+        { providerId },
+        () => getProvider(db, toolOpts, providerId) as ToolResult<ProviderDetails>,
+        (d) => Array.isArray(d.reviews),
+      ),
     listBookings: (): ToolResult<{ bookings: BookingRecord[] }> =>
       budgeted(
         "list_bookings",
         {},
-        () => (opts.broken?.listBookings ? opts.broken.listBookings(db, toolOpts, userId) : listBookings(db, toolOpts, userId)),
-        (d) => Array.isArray(d.bookings) && d.bookings.every((b) => typeof b?.id === "string" && typeof b?.price === "number"),
+        () =>
+          opts.broken?.listBookings
+            ? opts.broken.listBookings(db, toolOpts, userId)
+            : listBookings(db, toolOpts, userId),
+        (d) =>
+          Array.isArray(d.bookings) &&
+          d.bookings.every((b) => typeof b?.id === "string" && typeof b?.price === "number"),
       ),
-    holdSlot: (args: { providerId: string; slot: string }): ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }> =>
-      budgeted("hold_slot", { ...args }, () => holdSlot(db, toolOpts, userId, args), (d) => typeof d?.holdId === "string" && typeof d?.quotedPrice === "number"),
+    holdSlot: (args: {
+      providerId: string;
+      slot: string;
+    }): ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }> =>
+      budgeted(
+        "hold_slot",
+        { ...args },
+        () => holdSlot(db, toolOpts, userId, args),
+        (d) => typeof d?.holdId === "string" && typeof d?.quotedPrice === "number",
+      ),
     getBookingStatus: (idempotencyKey: string): ToolResult<{ status: string; bookingId?: string }> =>
-      budgeted("get_booking_status", { idempotencyKey }, () => getBookingStatus(db, toolOpts, idempotencyKey), (d) => typeof d?.status === "string"),
+      budgeted(
+        "get_booking_status",
+        { idempotencyKey },
+        () => getBookingStatus(db, toolOpts, idempotencyKey),
+        (d) => typeof d?.status === "string",
+      ),
     // ——— fail-closed writes (MH-2): executable only through booking operations (R1) ———
     book: (args: { holdId: string; idempotencyKey: string }): ToolResult<{ bookingId: string }> =>
       budgeted(
@@ -136,9 +187,19 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         (d) => typeof d?.bookingId === "string",
       ),
     cancel: (args: { bookingId: string; idempotencyKey: string }): ToolResult<never> =>
-      budgeted("cancel", { ...args }, () => refuse(), () => false),
+      budgeted(
+        "cancel",
+        { ...args },
+        () => refuse(),
+        () => false,
+      ),
     reschedule: (args: { bookingId: string; newSlot: string; idempotencyKey: string }): ToolResult<never> =>
-      budgeted("reschedule", { ...args }, () => refuse(), () => false),
+      budgeted(
+        "reschedule",
+        { ...args },
+        () => refuse(),
+        () => false,
+      ),
   };
 };
 
