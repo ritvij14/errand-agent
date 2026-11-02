@@ -6,8 +6,20 @@ import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-wind
 import type { Trace } from "../tracing/index.js";
 import type { ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, searchRange, slotLabel, type OptionBlock } from "./options.js";
-import { executeBook, MAX_BOOK_ATTEMPTS, operationRepo, startBookOperation, type BookTools, type OperationRecord } from "../booking/index.js";
-import { APPROVAL_MAX_AGE_MS, approvalCardPart, approvalRepo, type ApprovalRecord } from "../approval/index.js";
+import {
+  executeBook,
+  MAX_BOOK_ATTEMPTS,
+  operationRepo,
+  startBookOperation,
+  type BookTools,
+  type OperationRecord,
+} from "../booking/index.js";
+import {
+  APPROVAL_MAX_AGE_MS,
+  approvalCardPart,
+  approvalRepo,
+  type ApprovalRecord,
+} from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
 // Facts → candidates → selection → hold → approval build one on top of the other; a
@@ -42,13 +54,26 @@ export type WorkflowRow = {
 export type Selection = { providerId: string; slot: string };
 export type Hold = { holdId: string; expiresAt: number; quotedPrice: number };
 
-export type ApplyOutcome = { phase: string; reply: string; facts: Facts; code?: string; parts?: Record<string, unknown>[] };
+export type ApplyOutcome = {
+  phase: string;
+  reply: string;
+  facts: Facts;
+  code?: string;
+  parts?: Record<string, unknown>[];
+};
 
 /** `search_providers` through the run's tool gateway (the only way to the provider API). */
-export type SearchTool = (args: { service: string; area: string; from: string; to: string }) => ToolResult<{ providers: ProviderSummary[] }>;
+export type SearchTool = (args: {
+  service: string;
+  area: string;
+  from: string;
+  to: string;
+}) => ToolResult<{ providers: ProviderSummary[] }>;
 
 /** `hold_slot` through the run's tool gateway. */
-export type HoldTool = (args: Selection) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
+export type HoldTool = (
+  args: Selection,
+) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
 
 /** What the run applying a message lends the store: its trace (MH-7) and its tools. */
 export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool; book?: BookTools };
@@ -107,7 +132,7 @@ const decode = (row: WorkflowRecord): WorkflowRow => ({
 
 // A time fact whose window has no bound at all counts as missing (it would search
 // everything); the "any" reading of time searches the full window instead.
-const timeFactHasBounds = (fact: Fact & { value: TimeWindow | null } | undefined): boolean => {
+const timeFactHasBounds = (fact: (Fact & { value: TimeWindow | null }) | undefined): boolean => {
   const w = fact?.value;
   return !!w && (w.dateFrom !== null || w.dateTo !== null || w.earliest !== null || w.latest !== null);
 };
@@ -116,7 +141,8 @@ type Held = { holdId: string; expiresAt: number; quotedPrice: number };
 
 /** The provider's display name from the saved option blocks. */
 const nameOf = (w: WorkflowRow, providerId: string): string =>
-  (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === providerId)?.provider.name ?? providerId;
+  (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === providerId)?.provider.name ??
+  providerId;
 const rupees = (n: number): string => `₹${n.toLocaleString("en-IN")}`;
 
 export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => {
@@ -130,16 +156,24 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
   const getActive = (conversationId: string): WorkflowRow | undefined => {
     const row = db
-      .prepare(`SELECT * FROM workflow WHERE conversation_id = ? AND phase NOT IN ('done','failed','abandoned') ORDER BY updated_at DESC LIMIT 1`)
+      .prepare(
+        `SELECT * FROM workflow WHERE conversation_id = ? AND phase NOT IN ('done','failed','abandoned') ORDER BY updated_at DESC LIMIT 1`,
+      )
       .get(conversationId) as WorkflowRecord | undefined;
     return row ? decode(row) : undefined;
   };
 
-  const fact = (key: keyof Facts, value: unknown): Fact => ({ value, source: "user", updatedAt: nowMs() }) as Fact;
+  const fact = (key: keyof Facts, value: unknown): Fact =>
+    ({ value, source: "user", updatedAt: nowMs() }) as Fact;
 
   /** Collect or advance: with every required fact present the phase is `searching`. */
   const nextPhase = (facts: Facts): string => {
-    const missing = REQUIRED.some((key) => !facts[key] || (key === "time_window" && !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null })));
+    const missing = REQUIRED.some(
+      (key) =>
+        !facts[key] ||
+        (key === "time_window" &&
+          !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null })),
+    );
     return missing ? "collecting" : "searching";
   };
 
@@ -147,26 +181,55 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     REQUIRED.filter((key) => {
       const f = facts[key];
       if (!f) return true;
-      if (key === "time_window") return !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null });
+      if (key === "time_window")
+        return !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null });
       return f.value === undefined;
     });
 
   /** Save with optimistic concurrency: the version must match the row’s current one (or -1 to insert). */
-  const saveWorkflow = (conversationId: string, expectedVersion: number, mutate: (w: WorkflowRow) => WorkflowRow): { ok: boolean; workflow?: WorkflowRow } => {
+  const saveWorkflow = (
+    conversationId: string,
+    expectedVersion: number,
+    mutate: (w: WorkflowRow) => WorkflowRow,
+  ): { ok: boolean; workflow?: WorkflowRow } => {
     const existing = getActive(conversationId);
     if (expectedVersion !== -1 && (!existing || existing.version !== expectedVersion)) return { ok: false };
     if (expectedVersion === -1) {
       if (existing) return { ok: false }; // only one active workflow per conversation
       const w = mutate({
-        id: randomUUID(), conversation_id: conversationId, user_id: "", intent: null,
-        phase: "collecting", facts: {}, candidates: null, selection: null, hold: null, target_booking_id: null,
-        pending_question: null, version: 0, updatedAt: nowMs(),
+        id: randomUUID(),
+        conversation_id: conversationId,
+        user_id: "",
+        intent: null,
+        phase: "collecting",
+        facts: {},
+        candidates: null,
+        selection: null,
+        hold: null,
+        target_booking_id: null,
+        pending_question: null,
+        version: 0,
+        updatedAt: nowMs(),
       } as WorkflowRow);
       try {
         db.prepare(
           `INSERT INTO workflow (id, conversation_id, user_id, intent, phase, facts, candidates, selection, hold, target_booking_id, pending_question, version, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-        ).run(w.id, conversationId, w.user_id, w.intent, w.phase, JSON.stringify(w.facts), json(w.candidates), json(w.selection), json(w.hold), w.target_booking_id, w.pending_question, nowMs(), nowMs());
+        ).run(
+          w.id,
+          conversationId,
+          w.user_id,
+          w.intent,
+          w.phase,
+          JSON.stringify(w.facts),
+          json(w.candidates),
+          json(w.selection),
+          json(w.hold),
+          w.target_booking_id,
+          w.pending_question,
+          nowMs(),
+          nowMs(),
+        );
         return { ok: true, workflow: getActive(conversationId) };
       } catch (err) {
         if (String((err as Error).message).includes("UNIQUE")) return { ok: false }; // lost the one-active-workflow race
@@ -180,9 +243,22 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         `UPDATE workflow SET intent = ?, phase = ?, facts = ?, candidates = ?, selection = ?, hold = ?, target_booking_id = ?, pending_question = ?, version = version + 1, updated_at = ?
          WHERE conversation_id = ? AND version = ?`,
       )
-      .run(next.intent, next.phase, JSON.stringify(next.facts), json(next.candidates), json(next.selection), json(next.hold), next.target_booking_id, next.pending_question, nowMs(), conversationId, expectedVersion);
+      .run(
+        next.intent,
+        next.phase,
+        JSON.stringify(next.facts),
+        json(next.candidates),
+        json(next.selection),
+        json(next.hold),
+        next.target_booking_id,
+        next.pending_question,
+        nowMs(),
+        conversationId,
+        expectedVersion,
+      );
     if (result.changes === 0) return { ok: false };
-    if (existing!.phase !== next.phase) trace?.record("state_transition", { fromPhase: existing!.phase, toPhase: next.phase, reason: "apply" });
+    if (existing!.phase !== next.phase)
+      trace?.record("state_transition", { fromPhase: existing!.phase, toPhase: next.phase, reason: "apply" });
     return { ok: true, workflow: getActive(conversationId) };
   };
 
@@ -198,30 +274,64 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
-    applyUserText: async (userId: string, conversationId: string, text: string, approvalId?: string): Promise<ApplyOutcome> => {
+    applyUserText: async (
+      userId: string,
+      conversationId: string,
+      text: string,
+      approvalId?: string,
+    ): Promise<ApplyOutcome> => {
       const active = getActive(conversationId);
-      const shown = active?.phase === "choosing" ? (active.candidates as OptionBlock[] | null) ?? undefined : undefined;
-      const read: ReadResult = await model.read({ text, waitingFor: active?.phase ?? "nothing", clock, options: shown });
+      const shown =
+        active?.phase === "choosing" ? ((active.candidates as OptionBlock[] | null) ?? undefined) : undefined;
+      const read: ReadResult = await model.read({
+        text,
+        waitingFor: active?.phase ?? "nothing",
+        clock,
+        options: shown,
+      });
 
       if (read.kind === "pick" || read.kind === "pick_unclear") {
         if (!active || !shown?.length) {
-          return { phase: active?.phase ?? "collecting", reply: "There's no list of options to pick from right now.", code: "NOTHING_TO_PICK", facts: active?.facts ?? ({} as Facts) };
+          return {
+            phase: active?.phase ?? "collecting",
+            reply: "There's no list of options to pick from right now.",
+            code: "NOTHING_TO_PICK",
+            facts: active?.facts ?? ({} as Facts),
+          };
         }
-        const chosen = read.kind === "pick" ? shown.find((b) => b.provider.id === read.providerId && b.slots.some((s) => s.start === read.slot)) : undefined;
+        const chosen =
+          read.kind === "pick"
+            ? shown.find(
+                (b) => b.provider.id === read.providerId && b.slots.some((s) => s.start === read.slot),
+              )
+            : undefined;
         if (read.kind === "pick_unclear" || !chosen) {
-          return { ...optionsOutcome(active, "Which slot? Tap one and press Confirm, or tell me the provider and the time."), code: read.kind === "pick" ? "NOTHING_TO_PICK" : undefined };
+          return {
+            ...optionsOutcome(
+              active,
+              "Which slot? Tap one and press Confirm, or tell me the provider and the time.",
+            ),
+            code: read.kind === "pick" ? "NOTHING_TO_PICK" : undefined,
+          };
         }
-        const saved = saveWorkflow(conversationId, active.version, (w) => ({ ...w, selection: { providerId: read.providerId, slot: read.slot }, phase: "holding" }));
-        if (!saved.ok || !saved.workflow) return { phase: active.phase, reply: "", code: "unknown_error", facts: active.facts };
+        const saved = saveWorkflow(conversationId, active.version, (w) => ({
+          ...w,
+          selection: { providerId: read.providerId, slot: read.slot },
+          phase: "holding",
+        }));
+        if (!saved.ok || !saved.workflow)
+          return { phase: active.phase, reply: "", code: "unknown_error", facts: active.facts };
         return advance(saved.workflow);
       }
 
       if (active?.phase === "awaiting_approval") {
         // § 2.5.5 rule 1: a typed yes answers the card it carries, else the one waiting
-        if (read.kind === "decision") return decideOn(active, approvalId, read.decision === "yes" ? "approve" : "decline", "typed");
+        if (read.kind === "decision")
+          return decideOn(active, approvalId, read.decision === "yes" ? "approve" : "decline", "typed");
         if (read.kind === "unknown") {
           const open = approvals.getOpen(active.id);
-          if (open) return cardOutcome(active, open, "I didn't catch that — approve or decline the booking below.");
+          if (open)
+            return cardOutcome(active, open, "I didn't catch that — approve or decline the booking below.");
         }
       }
 
@@ -233,22 +343,45 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (read.kind === "unknown" || read.kind === "decision") {
         // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
         const phase = getActive(conversationId)?.phase ?? "collecting";
-        return { phase, reply: "", code: "NOT_UNDERSTOOD", facts: getActive(conversationId)?.facts ?? ({} as Facts) };
+        return {
+          phase,
+          reply: "",
+          code: "NOT_UNDERSTOOD",
+          facts: getActive(conversationId)?.facts ?? ({} as Facts),
+        };
       }
 
       if (read.kind === "drop") {
         const current = getActive(conversationId);
         if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
         voidOpenApproval(current, "user_dropped");
-        const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, phase: "abandoned", pending_question: null }));
-        trace?.record("state_transition", { fromPhase: current.phase, toPhase: "abandoned", reason: "user dropped" });
-        return { phase: "abandoned", reply: "Okay, dropped. Nothing was booked.", facts: {} as Facts, code: saved.ok ? undefined : "unknown_error" };
+        const saved = saveWorkflow(conversationId, current.version, (w) => ({
+          ...w,
+          phase: "abandoned",
+          pending_question: null,
+        }));
+        trace?.record("state_transition", {
+          fromPhase: current.phase,
+          toPhase: "abandoned",
+          reason: "user dropped",
+        });
+        return {
+          phase: "abandoned",
+          reply: "Okay, dropped. Nothing was booked.",
+          facts: {} as Facts,
+          code: saved.ok ? undefined : "unknown_error",
+        };
       }
 
       const current = getActive(conversationId);
 
       if (current) {
-        if (read.kind === "workflow" && read.intent && read.intent !== current.intent && current.phase !== "collecting") {
+        if (
+          read.kind === "workflow" &&
+          read.intent &&
+          read.intent !== current.intent &&
+          current.phase !== "collecting"
+        ) {
           // FR-15: switching tasks on an unfinished workflow asks first (U30); until
           // then record that the intent stayed
         }
@@ -259,25 +392,65 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (!intent) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
       const flags = read as { unknownService?: boolean; unknownArea?: boolean; timeOutOfRange?: boolean };
       if (flags.unknownService)
-        return { phase: "collecting", reply: "I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?", code: "UNKNOWN_SERVICE", facts: {} as Facts };
+        return {
+          phase: "collecting",
+          reply:
+            "I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?",
+          code: "UNKNOWN_SERVICE",
+          facts: {} as Facts,
+        };
       if (flags.unknownArea)
-        return { phase: "collecting", reply: "I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?", code: "UNKNOWN_AREA", facts: {} as Facts };
+        return {
+          phase: "collecting",
+          reply: "I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?",
+          code: "UNKNOWN_AREA",
+          facts: {} as Facts,
+        };
       const facts: Facts = {};
-      const values = read as { service?: string | null; area?: string | null; budget?: number | "any"; preferences?: string | null; timeWindow?: TimeWindow };
+      const values = read as {
+        service?: string | null;
+        area?: string | null;
+        budget?: number | "any";
+        preferences?: string | null;
+        timeWindow?: TimeWindow;
+      };
       if (values.service) facts.service = fact("service", values.service);
       if (values.area) facts.area = fact("area", values.area);
-      if (values.timeWindow) facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
+      if (values.timeWindow)
+        facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
       if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
       if (values.preferences) facts.preferences = fact("preferences", values.preferences);
 
-      const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts: { ...w.facts, ...facts }, phase: nextPhase({ ...w.facts, ...facts }) }));
-      if (!saved.ok || !saved.workflow) return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
+      const saved = saveWorkflow(conversationId, -1, (w) => ({
+        ...w,
+        user_id: userId,
+        intent,
+        facts: { ...w.facts, ...facts },
+        phase: nextPhase({ ...w.facts, ...facts }),
+      }));
+      if (!saved.ok || !saved.workflow)
+        return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
       for (const [key, f] of Object.entries(saved.workflow.facts)) {
-        trace?.record("fact_changed", { key, oldValue: null, newValue: (f as Fact).value, source: "user", isCorrection: false });
+        trace?.record("fact_changed", {
+          key,
+          oldValue: null,
+          newValue: (f as Fact).value,
+          source: "user",
+          isCorrection: false,
+        });
       }
-      trace?.record("state_transition", { fromPhase: "none", toPhase: saved.workflow.phase, reason: "workflow started" });
+      trace?.record("state_transition", {
+        fromPhase: "none",
+        toPhase: saved.workflow.phase,
+        reason: "workflow started",
+      });
       return flags.timeOutOfRange
-        ? { phase: saved.workflow.phase, reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.", facts: saved.workflow.facts, code: TIME_OUT_OF_RANGE }
+        ? {
+            phase: saved.workflow.phase,
+            reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.",
+            facts: saved.workflow.facts,
+            code: TIME_OUT_OF_RANGE,
+          }
         : advance(saved.workflow);
     },
 
@@ -286,7 +459,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const used = approvals.getById(approvalId);
       if (used?.status === "used") return reportUsed(used);
       const active = getActive(conversationId);
-      if (!active) return { phase: "none", reply: "That approval is no longer valid — nothing is waiting for your approval.", facts: {} as Facts, code: "APPROVAL_STALE" };
+      if (!active)
+        return {
+          phase: "none",
+          reply: "That approval is no longer valid — nothing is waiting for your approval.",
+          facts: {} as Facts,
+          code: "APPROVAL_STALE",
+        };
       return decideOn(active, approvalId, decision, "button");
     },
 
@@ -316,7 +495,11 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         }
       } else {
         // no window yet — treat the correction as a new window statement
-        const parsed = mergeCorrection({ dateFrom: null, dateTo: null, earliest: null, latest: null }, read.correctionText ?? read.text, clock);
+        const parsed = mergeCorrection(
+          { dateFrom: null, dateTo: null, earliest: null, latest: null },
+          read.correctionText ?? read.text,
+          clock,
+        );
         if (parsed.ok) {
           facts.time_window = fact("time_window", parsed.data) as Fact & { value: TimeWindow };
           timeChanged = true;
@@ -366,7 +549,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       ...(changed ? { candidates: null, selection: null, hold: null } : {}),
       intent: (values.intent as WorkflowRow["intent"]) ?? w.intent,
     }));
-    if (!saved.ok || !saved.workflow) return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
+    if (!saved.ok || !saved.workflow)
+      return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
     const savedWorkflow = saved.workflow;
 
     for (const key of ["service", "area", "time_window", "budget", "preferences"] as (keyof Facts)[]) {
@@ -401,7 +585,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const row = db.prepare(`SELECT * FROM workflow WHERE id = ?`).get(record.workflow_id) as WorkflowRecord;
     const w = decode(row);
     const what = `${nameOf(w, record.provider_id)} on ${slotLabel(record.slot)}`;
-    const result = op?.result ? (JSON.parse(op.result) as { bookingId?: string; checkedStatus?: string; error?: string }) : {};
+    const result = op?.result
+      ? (JSON.parse(op.result) as { bookingId?: string; checkedStatus?: string; error?: string })
+      : {};
     const reply =
       op?.status === "succeeded"
         ? `Already booked: ${what}. Booking id: ${result.bookingId}. I didn't book it again.`
@@ -412,8 +598,16 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   }
 
   function cardOutcome(w: WorkflowRow, record: ApprovalRecord, reply: string, code?: string): ApplyOutcome {
-    const name = (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === record.provider_id)?.provider.name ?? record.provider_id;
-    return { phase: w.phase, reply, facts: w.facts, parts: [approvalCardPart(record, name)], ...(code ? { code } : {}) };
+    const name =
+      (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === record.provider_id)?.provider
+        .name ?? record.provider_id;
+    return {
+      phase: w.phase,
+      reply,
+      facts: w.facts,
+      parts: [approvalCardPart(record, name)],
+      ...(code ? { code } : {}),
+    };
   }
 
   /**
@@ -421,7 +615,12 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * pending and fresh. Anything else is APPROVAL_STALE / APPROVAL_ALREADY_USED, and
    * the current details are shown again.
    */
-  function decideOn(w: WorkflowRow, approvalId: string | undefined, decision: "approve" | "decline", via: "button" | "typed"): ApplyOutcome {
+  function decideOn(
+    w: WorkflowRow,
+    approvalId: string | undefined,
+    decision: "approve" | "decline",
+    via: "button" | "typed",
+  ): ApplyOutcome {
     const open = approvals.getOpen(w.id);
     const target = approvalId ? approvals.getById(approvalId) : open;
     if (target?.status === "used") return reportUsed(target);
@@ -431,19 +630,46 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (!target || !open || target.id !== open.id || target.status !== "pending") {
       // R2: an old card's id never decides the current card
       return open
-        ? cardOutcome(w, open, "That approval is no longer valid — the details changed. Here is the current one.", "APPROVAL_STALE")
-        : { phase: w.phase, reply: "That approval is no longer valid — nothing is waiting for your approval.", facts: w.facts, code: "APPROVAL_STALE" };
+        ? cardOutcome(
+            w,
+            open,
+            "That approval is no longer valid — the details changed. Here is the current one.",
+            "APPROVAL_STALE",
+          )
+        : {
+            phase: w.phase,
+            reply: "That approval is no longer valid — nothing is waiting for your approval.",
+            facts: w.facts,
+            code: "APPROVAL_STALE",
+          };
     }
     if (nowMs() - target.created_at > APPROVAL_MAX_AGE_MS) {
       voidOpenApproval(w, "expired");
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, hold: null, phase: "holding" }));
-      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+        ...wf,
+        hold: null,
+        phase: "holding",
+      }));
+      if (!saved.ok || !saved.workflow)
+        return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
       const fresh = advance(saved.workflow); // re-hold the same slot → a new card
-      return { ...fresh, reply: `That approval expired after 10 minutes, so I checked again. ${fresh.reply}`, code: "APPROVAL_STALE" };
+      return {
+        ...fresh,
+        reply: `That approval expired after 10 minutes, so I checked again. ${fresh.reply}`,
+        code: "APPROVAL_STALE",
+      };
     }
     const status = decision === "approve" ? "approved" : "declined";
     approvals.decide(target.id, status, via, nowMs());
-    trace?.record("approval_event", { approvalId: target.id, event: status, via, action: target.action, providerId: target.provider_id, slot: target.slot, price: target.price });
+    trace?.record("approval_event", {
+      approvalId: target.id,
+      event: status,
+      via,
+      action: target.action,
+      providerId: target.provider_id,
+      slot: target.slot,
+      price: target.price,
+    });
     if (decision === "approve") {
       // § 2.5.6 step 1 (Gate 1): approval used + operation created + workflow executing, one transaction
       let moved: WorkflowRow | undefined;
@@ -451,30 +677,55 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         db,
         clock,
         target.id,
-        { providerId: target.provider_id, slot: target.slot, price: target.price, holdId: w.hold?.holdId ?? "" },
+        {
+          providerId: target.provider_id,
+          slot: target.slot,
+          price: target.price,
+          holdId: w.hold?.holdId ?? "",
+        },
         () => {
-          moved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "executing" })).workflow;
+          moved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+            ...wf,
+            phase: "executing",
+          })).workflow;
           if (!moved) throw new Error("workflow changed while approving"); // rolls the whole step back
         },
       );
       if (!started.ok || !moved) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-      trace?.record("operation_event", { event: "created", kind: "book", key: started.operation.idempotency_key });
+      trace?.record("operation_event", {
+        event: "created",
+        kind: "book",
+        key: started.operation.idempotency_key,
+      });
       return advance(moved);
     }
     // R9: decline goes back by intent — a booking returns to the same options
-    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, selection: null, hold: null, phase: "choosing" }));
-    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      selection: null,
+      hold: null,
+      phase: "choosing",
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     return optionsOutcome(saved.workflow, "Okay, not that one. Here are the options again.");
   }
 
   function optionsOutcome(w: WorkflowRow, reply: string): ApplyOutcome {
-    return { phase: w.phase, reply, facts: w.facts, parts: [{ type: "option_blocks", blocks: w.candidates as OptionBlock[] }] };
+    return {
+      phase: w.phase,
+      reply,
+      facts: w.facts,
+      parts: [{ type: "option_blocks", blocks: w.candidates as OptionBlock[] }],
+    };
   }
 
   /** NFR-3: a slot that can't be had is an answer, not a glitch — drop it and show what is left. */
   function showRemaining(w: WorkflowRow, gone: Selection, reply: string, code?: string): ApplyOutcome {
     const remaining = (w.candidates as OptionBlock[])
-      .map((b) => (b.provider.id === gone.providerId ? { ...b, slots: b.slots.filter((s) => s.start !== gone.slot) } : b))
+      .map((b) =>
+        b.provider.id === gone.providerId ? { ...b, slots: b.slots.filter((s) => s.start !== gone.slot) } : b,
+      )
       .filter((b) => b.slots.length > 0);
     const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
       ...wf,
@@ -483,7 +734,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       hold: null,
       phase: remaining.length ? "choosing" : "searching",
     }));
-    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     if (!remaining.length) return advance(saved.workflow);
     return { ...optionsOutcome(saved.workflow, reply), ...(code ? { code } : {}) };
   }
@@ -496,7 +748,11 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   function awaitApproval(w: WorkflowRow, held: Held, reply?: string): ApplyOutcome {
     const selection = w.selection!;
     const result = db.transaction(() => {
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, hold: held, phase: "awaiting_approval" }));
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+        ...wf,
+        hold: held,
+        phase: "awaiting_approval",
+      }));
       if (!saved.ok || !saved.workflow) return undefined;
       const record = approvals.createPending(
         {
@@ -515,21 +771,44 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     })();
     if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     const { record } = result;
-    trace?.record("approval_event", { approvalId: record.id, event: "created", action: "book", providerId: record.provider_id, slot: record.slot, price: record.price });
-    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.price;
+    trace?.record("approval_event", {
+      approvalId: record.id,
+      event: "created",
+      action: "book",
+      providerId: record.provider_id,
+      slot: record.slot,
+      price: record.price,
+    });
+    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)
+      ?.provider.price;
     const text =
       reply ??
       (searchPrice !== undefined && record.price !== searchPrice
         ? `The provider quoted ${rupees(record.price)} for this slot (the search showed ${rupees(searchPrice)}). Approve to book it at the new price, or decline.`
         : `Here are the details — approve to book, or decline.`);
-    return { phase: "awaiting_approval", reply: text, facts: result.workflow.facts, parts: [approvalCardPart(record, nameOf(w, record.provider_id))] };
+    return {
+      phase: "awaiting_approval",
+      reply: text,
+      facts: result.workflow.facts,
+      parts: [approvalCardPart(record, nameOf(w, record.provider_id))],
+    };
   }
 
   /** `holding` needs no user input: hold the picked slot, then wait for approval. */
   function holdSelection(w: WorkflowRow): ApplyOutcome {
     const held = hold!(w.selection!);
-    if (!held.ok) return showRemaining(w, w.selection!, "That slot was just taken — here are the options still open.", held.error);
-    return awaitApproval(w, { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice });
+    if (!held.ok)
+      return showRemaining(
+        w,
+        w.selection!,
+        "That slot was just taken — here are the options still open.",
+        held.error,
+      );
+    return awaitApproval(w, {
+      holdId: held.data.holdId,
+      expiresAt: held.data.expiresAt,
+      quotedPrice: held.data.quotedPrice,
+    });
   }
 
   /**
@@ -540,7 +819,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const op = operations.inFlightFor(w.id)!;
     let current = w;
     const outcome = executeBook(db, clock, bookTools!, op, () => {
-      current = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: "verifying" })).workflow ?? current;
+      current =
+        saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: "verifying" })).workflow ??
+        current;
     });
     if (!outcome.ok && outcome.kind === "hold_expired") return reHold(current, op);
     trace?.record("operation_event", {
@@ -551,9 +832,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     });
     if (!outcome.ok && outcome.kind === "slot_taken") {
       // the approval stays used; the user picks again from what is left
-      return showRemaining(current, w.selection!, "That slot was taken by someone else just now, so nothing was booked — here are the options still open.", "slot_taken");
+      return showRemaining(
+        current,
+        w.selection!,
+        "That slot was taken by someone else just now, so nothing was booked — here are the options still open.",
+        "slot_taken",
+      );
     }
-    const finished = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: outcome.ok ? "done" : "failed" }));
+    const finished = saveWorkflow(w.conversation_id, current.version, (wf) => ({
+      ...wf,
+      phase: outcome.ok ? "done" : "failed",
+    }));
     const facts = (finished.workflow ?? current).facts;
     if (!outcome.ok) {
       return {
@@ -582,22 +871,47 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const held = hold!(selection);
     if (held.ok && held.data.quotedPrice === approval.price && op.hold_seq < MAX_BOOK_ATTEMPTS) {
       const next = operations.nextKey(op.id, held.data.holdId, "hold_expired", nowMs());
-      trace?.record("operation_event", { event: "key_changed", kind: "book", key: next.idempotency_key, result: "hold_expired" });
+      trace?.record("operation_event", {
+        event: "key_changed",
+        kind: "book",
+        key: next.idempotency_key,
+        result: "hold_expired",
+      });
       const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
         ...wf,
-        hold: { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice },
+        hold: {
+          holdId: held.data.holdId,
+          expiresAt: held.data.expiresAt,
+          quotedPrice: held.data.quotedPrice,
+        },
       }));
-      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      if (!saved.ok || !saved.workflow)
+        return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
       return executeOperation(saved.workflow);
     }
     const reason = held.ok ? "price_changed" : "slot_changed";
-    operations.finish(op.id, "failed", { error: "hold_expired", rehold: held.ok ? reason : held.error }, nowMs());
-    trace?.record("operation_event", { event: "failed", kind: "book", key: op.idempotency_key, result: reason });
+    operations.finish(
+      op.id,
+      "failed",
+      { error: "hold_expired", rehold: held.ok ? reason : held.error },
+      nowMs(),
+    );
+    trace?.record("operation_event", {
+      event: "failed",
+      kind: "book",
+      key: op.idempotency_key,
+      result: reason,
+    });
     if (approvals.voidUsed(approval.id, reason, nowMs())) {
       trace?.record("approval_event", { approvalId: approval.id, event: "voided", voidReason: reason });
     }
     if (!held.ok) {
-      return showRemaining(w, selection, "The hold on that slot ran out and the slot is gone now, so nothing was booked — here are the options still open.", "slot_changed");
+      return showRemaining(
+        w,
+        selection,
+        "The hold on that slot ran out and the slot is gone now, so nothing was booked — here are the options still open.",
+        "slot_changed",
+      );
     }
     return awaitApproval(
       w,
@@ -616,7 +930,12 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const timeWindow = w.facts.time_window!.value!;
     const found = search({ service, area, ...searchRange(timeWindow, clock) });
     if (!found.ok) {
-      return { phase: w.phase, reply: "I couldn't reach the provider service just now — try again in a moment.", facts: w.facts, code: found.error };
+      return {
+        phase: w.phase,
+        reply: "I couldn't reach the provider service just now — try again in a moment.",
+        facts: w.facts,
+        code: found.error,
+      };
     }
     const options = buildOptions(found.data.providers, { timeWindow, budget: w.facts.budget?.value });
     const what = `${SERVICE_NAMES[service] ?? service} in ${AREA_NAMES[area] ?? area}`;
@@ -628,8 +947,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
           : `Nobody offering ${what} has a free slot in that time. Want to try a wider time window?`;
       return { phase: "searching", reply, facts: (saved.workflow ?? w).facts, code: "NO_MATCHES" };
     }
-    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: options.blocks, phase: "choosing" }));
-    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      candidates: options.blocks,
+      phase: "choosing",
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     const count = options.blocks.length;
     return {
       phase: "choosing",
@@ -649,10 +973,20 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
   function replyFor(w: WorkflowRow, errorCode?: string): ApplyOutcome {
     if (errorCode === "UNKNOWN_SERVICE") {
-      return { phase: w.phase, reply: `I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?`, facts: w.facts, code: errorCode };
+      return {
+        phase: w.phase,
+        reply: `I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?`,
+        facts: w.facts,
+        code: errorCode,
+      };
     }
     if (errorCode === "UNKNOWN_AREA") {
-      return { phase: w.phase, reply: `I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?`, facts: w.facts, code: errorCode };
+      return {
+        phase: w.phase,
+        reply: `I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?`,
+        facts: w.facts,
+        code: errorCode,
+      };
     }
     const area = typeof w.facts.area?.value === "string" ? w.facts.area.value : null;
 
@@ -668,13 +1002,20 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
     const missing = missingFacts(w.facts);
     if (w.phase === "collecting" && missing.length > 0) {
-      const asks = missing.map((key) => (key === "area" ? "which area" : key === "time_window" ? "when" : `which ${key}`));
+      const asks = missing.map((key) =>
+        key === "area" ? "which area" : key === "time_window" ? "when" : `which ${key}`,
+      );
       const known = Object.entries(w.facts)
         .filter(([key]) => key !== "time_window" && w.facts[key as keyof Facts] !== undefined)
         .map(([, v]) => (typeof (v as Fact).value === "string" ? ((v as Fact).value as string) : null))
         .filter((s) => s !== null);
       const subject = known.length > 0 ? known.join(", ") : "that";
-      return { phase: "collecting", reply: `${subject ? `${subject} — ` : ""}${asks.join(" and ")}?`, facts: w.facts, code: errorCode };
+      return {
+        phase: "collecting",
+        reply: `${subject ? `${subject} — ` : ""}${asks.join(" and ")}?`,
+        facts: w.facts,
+        code: errorCode,
+      };
     }
     return { phase: w.phase, reply: "", facts: w.facts, code: errorCode };
   }

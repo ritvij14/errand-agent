@@ -5,19 +5,36 @@ import { approvalRepo } from "../approval/index.js";
 import { authorizeWrite } from "../booking/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel } from "../agent/index.js";
-import { createMockSettings, createToolGateway, DEFAULT_SEED, type ForcedQueue, type MockSettings } from "../tools/index.js";
+import {
+  createMockSettings,
+  createToolGateway,
+  DEFAULT_SEED,
+  type ForcedQueue,
+  type MockSettings,
+} from "../tools/index.js";
 import { conversationRepo, type Conversation, type Run } from "./conversations.repo.js";
 
 // The conversation feature (MH-5): one active run per conversation, everything
 // else refused with CONVERSATION_BUSY; every run ends with a recorded outcome.
 
 /** `mock` tunes the in-process provider API; evals pass their scenario seed. */
-export type ConversationsDeps = { db: Db; clock: Clock; model: AgentModel; mock?: { seed?: string; settings?: MockSettings; forced?: ForcedQueue } };
+export type ConversationsDeps = {
+  db: Db;
+  clock: Clock;
+  model: AgentModel;
+  mock?: { seed?: string; settings?: MockSettings; forced?: ForcedQueue };
+};
 
 export type ReplyPart = Record<string, unknown>;
-export type Reply = { runId: string; outcome: string; message: { id: string; role: "agent"; text: string; parts: ReplyPart[]; runId: string } };
+export type Reply = {
+  runId: string;
+  outcome: string;
+  message: { id: string; role: "agent"; text: string; parts: ReplyPart[]; runId: string };
+};
 
-export type SendResult = { ok: true; reply: Reply } | { ok: false; code: "CONVERSATION_BUSY" | "VALIDATION_ERROR" | "NOT_FOUND"; message: string };
+export type SendResult =
+  | { ok: true; reply: Reply }
+  | { ok: false; code: "CONVERSATION_BUSY" | "VALIDATION_ERROR" | "NOT_FOUND"; message: string };
 
 export type ConversationFailure = { code: string; message: string };
 export type ConversationRunError = { ok: false; code: string; message: string };
@@ -49,13 +66,31 @@ export const createConversationService = (deps: ConversationsDeps) => {
     userMessage?: { text: string; clientMessageId: string },
   ): Promise<SendResult> => {
     if (busyMarkers.has(conversationId)) {
-      return { ok: false, code: "CONVERSATION_BUSY", message: "Still working on your last message — one moment." };
+      return {
+        ok: false,
+        code: "CONVERSATION_BUSY",
+        message: "Still working on your last message — one moment.",
+      };
     }
     const run = repo.createRun(conversationId, userId, trigger, clock.now().getTime());
     busyMarkers.add(conversationId);
     const trace = startTrace(db, clock, run.id);
-    trace.record("run_started", { trigger, conversationId, userId, phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none" });
-    if (userMessage) repo.addMessage(conversationId, run.id, "user", userMessage.text, [], clock.now().getTime(), userMessage.clientMessageId);
+    trace.record("run_started", {
+      trigger,
+      conversationId,
+      userId,
+      phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none",
+    });
+    if (userMessage)
+      repo.addMessage(
+        conversationId,
+        run.id,
+        "user",
+        userMessage.text,
+        [],
+        clock.now().getTime(),
+        userMessage.clientMessageId,
+      );
     try {
       const gateway = createToolGateway({
         db,
@@ -71,19 +106,35 @@ export const createConversationService = (deps: ConversationsDeps) => {
         trace,
         search: gateway.searchProviders,
         hold: gateway.holdSlot,
-        book: { book: gateway.book, status: gateway.getBookingStatus, retryWaitsMs: mockSettings.retryWaitsMs },
+        book: {
+          book: gateway.book,
+          status: gateway.getBookingStatus,
+          retryWaitsMs: mockSettings.retryWaitsMs,
+        },
       });
       const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
       const toolCalls = gateway.toolCallsUsed();
       const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
-      if (userMessage) trace.record("model_call", { job: "read", input: userMessage.text, output: outcome.code ?? "applied" });
+      if (userMessage)
+        trace.record("model_call", {
+          job: "read",
+          input: userMessage.text,
+          output: outcome.code ?? "applied",
+        });
       trace.record("model_call", { job: "write", output: replyText });
       const modelCalls = userMessage ? 2 : 1;
       const endedAt = clock.now().getTime();
       const runOutcome = outcome.code === "unknown_error" ? "error" : "completed"; // conversation-level errors complete the run (§2.5.3)
       repo.finishRun(run.id, runOutcome, endedAt, modelCalls, toolCalls);
       trace.record("run_ended", { outcome: runOutcome, modelCalls, toolCalls });
-      const saved = repo.addMessage(conversationId, run.id, "agent", replyText, (outcome.parts ?? []) as ReplyPart[], endedAt);
+      const saved = repo.addMessage(
+        conversationId,
+        run.id,
+        "agent",
+        replyText,
+        (outcome.parts ?? []) as ReplyPart[],
+        endedAt,
+      );
       return { ok: true, reply: toReply(run, saved) };
     } finally {
       busyMarkers.delete(conversationId);
@@ -93,13 +144,22 @@ export const createConversationService = (deps: ConversationsDeps) => {
   const toReply = (run: Run, message: { id: string; text: string; parts: unknown[] }): Reply => ({
     runId: run.id,
     outcome: (run.outcome as string) ?? "completed",
-    message: { id: message.id, role: "agent", text: message.text, parts: message.parts as ReplyPart[], runId: run.id },
+    message: {
+      id: message.id,
+      role: "agent",
+      text: message.text,
+      parts: message.parts as ReplyPart[],
+      runId: run.id,
+    },
   });
 
   return {
-    createConversation: (userId: string): Conversation => repo.createConversation(userId, clock.now().getTime()),
+    createConversation: (userId: string): Conversation =>
+      repo.createConversation(userId, clock.now().getTime()),
 
-    listConversations: (userId: string): { id: string; title: string; createdAt: number; updatedAt: number; busy: boolean }[] =>
+    listConversations: (
+      userId: string,
+    ): { id: string; title: string; createdAt: number; updatedAt: number; busy: boolean }[] =>
       repo.listConversations(userId).map((c) => ({
         id: c.id,
         title: c.title,
@@ -108,14 +168,18 @@ export const createConversationService = (deps: ConversationsDeps) => {
         busy: busyMarkers.has(c.id),
       })),
 
-    readConversation: (userId: string, id: string): { conversation: Conversation; messages: unknown[]; busy: boolean } | ConversationFailure => {
+    readConversation: (
+      userId: string,
+      id: string,
+    ): { conversation: Conversation; messages: unknown[]; busy: boolean } | ConversationFailure => {
       const conversation = repo.getConversation(id, userId);
       if (!conversation) return { code: "NOT_FOUND", message: "Conversation doesn't exist" };
       return { conversation, messages: repo.listMessages(id), busy: busyMarkers.has(id) };
     },
 
     runTrace: (userId: string, runId: string): { run: unknown; events: unknown[] } | ConversationFailure => {
-      const row = db.prepare(`SELECT * FROM run WHERE id = ? AND user_id = ?`).get(runId, userId) as Run | undefined;
+      const row = db.prepare(`SELECT * FROM run WHERE id = ? AND user_id = ?`).get(runId, userId) as
+        Run | undefined;
       if (!row) return { code: "NOT_FOUND", message: "Run doesn't exist" } as const;
       return {
         run: {
@@ -140,8 +204,18 @@ export const createConversationService = (deps: ConversationsDeps) => {
       clientMessageId: string | undefined,
       approvalId?: string,
     ): Promise<SendResult> => {
-      if (typeof text !== "string" || text.trim() === "" || text.length > 2000 || typeof clientMessageId !== "string" || clientMessageId === "") {
-        return { ok: false, code: "VALIDATION_ERROR", message: "Field 'text' (1–2000 chars) and 'clientMessageId' are required" };
+      if (
+        typeof text !== "string" ||
+        text.trim() === "" ||
+        text.length > 2000 ||
+        typeof clientMessageId !== "string" ||
+        clientMessageId === ""
+      ) {
+        return {
+          ok: false,
+          code: "VALIDATION_ERROR",
+          message: "Field 'text' (1–2000 chars) and 'clientMessageId' are required",
+        };
       }
       const conversation = repo.getConversation(conversationId, userId);
       if (!conversation) return { ok: false, code: "NOT_FOUND", message: "Conversation doesn't exist" };
@@ -149,7 +223,9 @@ export const createConversationService = (deps: ConversationsDeps) => {
       // R2: a resent clientMessageId replays the stored reply; no new run
       const already = repo.findUserMessageByClientMessageId(conversationId, clientMessageId);
       if (already) {
-        const replayedRun = db.prepare(`SELECT * FROM run WHERE id = ? AND user_id = ?`).get(already.run_id, userId) as Run | undefined;
+        const replayedRun = db
+          .prepare(`SELECT * FROM run WHERE id = ? AND user_id = ?`)
+          .get(already.run_id, userId) as Run | undefined;
         const replyMessage = replayedRun ? repo.findAgentReplyForRun(replayedRun.id) : undefined;
         if (replyMessage) {
           return {
@@ -157,25 +233,42 @@ export const createConversationService = (deps: ConversationsDeps) => {
             reply: {
               runId: replayedRun!.id,
               outcome: (replayedRun!.outcome as string) ?? "completed",
-              message: { id: replyMessage.id, role: "agent", text: replyMessage.text, parts: JSON.parse(String(replyMessage.parts)) as ReplyPart[], runId: replayedRun!.id },
+              message: {
+                id: replyMessage.id,
+                role: "agent",
+                text: replyMessage.text,
+                parts: JSON.parse(String(replyMessage.parts)) as ReplyPart[],
+                runId: replayedRun!.id,
+              },
             },
           };
         }
       }
 
-      return runTurn(userId, conversationId, "message", (text_) => workflowStore.applyUserText(userId, conversationId, text_, approvalId), {
-        text,
-        clientMessageId,
-      });
+      return runTurn(
+        userId,
+        conversationId,
+        "message",
+        (text_) => workflowStore.applyUserText(userId, conversationId, text_, approvalId),
+        {
+          text,
+          clientMessageId,
+        },
+      );
     },
 
     /** Approve / Decline buttons (§ 2.5.5): a run with trigger `approval_decision`. */
     decideApproval: async (userId: string, approvalId: string, decision: unknown): Promise<SendResult> => {
       if (decision !== "approve" && decision !== "decline") {
-        return { ok: false, code: "VALIDATION_ERROR", message: "Field 'decision' must be 'approve' or 'decline'" };
+        return {
+          ok: false,
+          code: "VALIDATION_ERROR",
+          message: "Field 'decision' must be 'approve' or 'decline'",
+        };
       }
       const record = approvals.getById(approvalId);
-      if (!record || record.user_id !== userId) return { ok: false, code: "NOT_FOUND", message: "Approval doesn't exist" };
+      if (!record || record.user_id !== userId)
+        return { ok: false, code: "NOT_FOUND", message: "Approval doesn't exist" };
       return runTurn(userId, record.conversation_id, "approval_decision", async () =>
         workflowStore.decide(record.conversation_id, approvalId, decision),
       );
