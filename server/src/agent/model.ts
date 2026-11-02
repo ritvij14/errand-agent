@@ -64,9 +64,12 @@ export const AREA_SYNONYMS: Record<string, string> = {
   whitefield: "whitefield",
 };
 
-const DROP_RE = /never mind|forget it|stop|not that|don't need/i;
-const YES_RE = /^\s*(yes|confirm|go ahead|book it|fine|ok|okay)\b/i;
-const NO_RE = /^\s*(no|decline|not this one|cancel that)\b/i;
+const DROP_RE = /never mind|forget it|stop|not that|don't need|cancel that/i;
+// § 2.5.5 rule 2: only a *plain* yes approves — the whole message is the decision word
+const PLAIN_YES = /^\s*(yes|yeah|yep|sure|confirm|approve|go ahead|book it|fine|ok|okay)[\s.,!]*$/i;
+const PLAIN_NO = /^\s*(no|nope|decline|not this one)[\s.,!]*$/i;
+// a decision word followed by more words: the rest is a change ("yes but 11am")
+const DECISION_LEAD = /^\s*(yes|yeah|yep|sure|ok|okay|no|nope)\b[\s,.!]*(?:but\s+)?/i;
 const BUDGET_UNDER = /(?:under|below|less than|max|budget)\s*₹?\s*([\d,]+)/i;
 
 export const findArea = (text: string): { area: string | null; unknownArea: boolean } => {
@@ -92,17 +95,34 @@ export const findService = (text: string): { service: string | null; unknownServ
   return { service: null, unknownService: false };
 };
 
+/** "yes but 11am" / "no, keep my budget but after 11": read the rest as a change. */
+const readDecisionWithChange = async (rest: string, clock: Clock): Promise<ReadResult> => {
+  const r = await readUserMessage(rest, clock);
+  if (r.kind === "correction" || r.kind === "drop") return r;
+  if (r.kind !== "workflow") return { kind: "unknown" };
+  if (r.timeWindow || r.timeOutOfRange) {
+    const after = /(?:after|not before)\s+\d/i.exec(rest);
+    return { kind: "correction", target: "time_window", text: rest, correctionText: after ? rest.slice(after.index) : rest, mergeTime: true };
+  }
+  if (r.budget !== undefined) return { kind: "correction", target: "budget", text: rest, budget: r.budget };
+  return r;
+};
+
 export const readUserMessage = async (text: string, clock: Clock, options?: OptionBlock[]): Promise<ReadResult> => {
   if (DROP_RE.test(text)) return { kind: "drop" };
+  if (PLAIN_YES.test(text)) return { kind: "decision", decision: "yes" };
+  if (PLAIN_NO.test(text)) return { kind: "decision", decision: "no" };
+  const lead = DECISION_LEAD.exec(text);
+  if (lead) return readDecisionWithChange(text.slice(lead[0].length), clock);
+
   const pick = options ? readPick(text, options, clock) : undefined;
   if (pick) return pick;
   if (VAGUE_PICK_RE.test(text)) return { kind: "pick_unclear" };
 
-  // corrections carry content: the trigger words, or a decision word with a change
+  // corrections carry content: a trigger word plus what changes
   const DAY_RE = /\b(saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/i;
   const correctionTrigger = /make it|move it|actually|change|correct|instead/i;
   const afterBound = /(?:after|not before)\s+(\d{1,2})\s*(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?/i.exec(text);
-  const bareDecision = /^\s*(yes|no|confirm|ok|okay|decline)\b[\s.,!]*$/i;
   const timeContent = afterBound || DAY_RE.exec(text);
   if (correctionTrigger.test(text) && timeContent) {
     return {
@@ -113,19 +133,6 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
       mergeTime: true,
     };
   }
-  if (!bareDecision.test(text) && timeContent && /^\s*(yes|no)\b/i.test(text)) {
-    // "no, keep my budget but after 11" — a decision that carries a change (R2/R9)
-    return {
-      kind: "correction",
-      target: "time_window",
-      text,
-      correctionText: text.slice(timeContent.index ?? 0),
-      mergeTime: true,
-    };
-  }
-  if (NO_RE.test(text)) return { kind: "decision", decision: "no" };
-  if (YES_RE.test(text)) return { kind: "decision", decision: "yes" };
-
   const budgetCorrection = BUDGET_UNDER.exec(text);
   if ((correctionTrigger.test(text) || /make the|set the/i.test(text)) && budgetCorrection) {
     return { kind: "correction", target: "budget", text, budget: budget(budgetCorrection[1]!) };

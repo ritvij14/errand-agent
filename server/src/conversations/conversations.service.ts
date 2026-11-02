@@ -1,6 +1,7 @@
 import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, readTrace } from "../tracing/index.js";
+import { approvalRepo } from "../approval/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel } from "../agent/index.js";
 import { createMockSettings, createToolGateway, DEFAULT_SEED, type ForcedQueue, type MockSettings } from "../tools/index.js";
@@ -30,8 +31,49 @@ export const createConversationService = (deps: ConversationsDeps) => {
   const { db, clock, model } = deps;
   const repo = conversationRepo(db);
   const workflowStore = createConversationWorkflow(db, clock, model);
+  const approvals = approvalRepo(db);
   const mockSettings = deps.mock?.settings ?? createMockSettings();
   const forced: ForcedQueue = deps.mock?.forced ?? { take: () => undefined };
+
+  /**
+   * One run (§ 2.5.3): busy check, run + trace, a tool gateway bound to the user and
+   * this run, the workflow step, the reply. A `message` run reads the text (model call
+   * 1) and saves it first (NFR-5); an `approval_decision` run carries structured input.
+   */
+  const runTurn = async (
+    userId: string,
+    conversationId: string,
+    trigger: "message" | "approval_decision",
+    step: (text: string) => Promise<ApplyOutcome>,
+    userMessage?: { text: string; clientMessageId: string },
+  ): Promise<SendResult> => {
+    if (busyMarkers.has(conversationId)) {
+      return { ok: false, code: "CONVERSATION_BUSY", message: "Still working on your last message — one moment." };
+    }
+    const run = repo.createRun(conversationId, userId, trigger, clock.now().getTime());
+    busyMarkers.add(conversationId);
+    const trace = startTrace(db, clock, run.id);
+    trace.record("run_started", { trigger, conversationId, userId, phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none" });
+    if (userMessage) repo.addMessage(conversationId, run.id, "user", userMessage.text, [], clock.now().getTime(), userMessage.clientMessageId);
+    try {
+      const gateway = createToolGateway({ db, clock, settings: mockSettings, forced, seed: deps.mock?.seed ?? DEFAULT_SEED, userId, trace });
+      workflowStore.useRun({ trace, search: gateway.searchProviders, hold: gateway.holdSlot });
+      const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
+      const toolCalls = gateway.toolCallsUsed();
+      const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
+      if (userMessage) trace.record("model_call", { job: "read", input: userMessage.text, output: outcome.code ?? "applied" });
+      trace.record("model_call", { job: "write", output: replyText });
+      const modelCalls = userMessage ? 2 : 1;
+      const endedAt = clock.now().getTime();
+      const runOutcome = outcome.code === "unknown_error" ? "error" : "completed"; // conversation-level errors complete the run (§2.5.3)
+      repo.finishRun(run.id, runOutcome, endedAt, modelCalls, toolCalls);
+      trace.record("run_ended", { outcome: runOutcome, modelCalls, toolCalls });
+      const saved = repo.addMessage(conversationId, run.id, "agent", replyText, (outcome.parts ?? []) as ReplyPart[], endedAt);
+      return { ok: true, reply: toReply(run, saved) };
+    } finally {
+      busyMarkers.delete(conversationId);
+    }
+  };
 
   const toReply = (run: Run, message: { id: string; text: string; parts: unknown[] }): Reply => ({
     runId: run.id,
@@ -76,7 +118,13 @@ export const createConversationService = (deps: ConversationsDeps) => {
 
     // ——— the run (§ 2.5.3) ———
 
-    sendMessage: async (userId: string, conversationId: string, text: string | undefined, clientMessageId: string | undefined): Promise<SendResult> => {
+    sendMessage: async (
+      userId: string,
+      conversationId: string,
+      text: string | undefined,
+      clientMessageId: string | undefined,
+      approvalId?: string,
+    ): Promise<SendResult> => {
       if (typeof text !== "string" || text.trim() === "" || text.length > 2000 || typeof clientMessageId !== "string" || clientMessageId === "") {
         return { ok: false, code: "VALIDATION_ERROR", message: "Field 'text' (1–2000 chars) and 'clientMessageId' are required" };
       }
@@ -100,34 +148,22 @@ export const createConversationService = (deps: ConversationsDeps) => {
         }
       }
 
-      if (busyMarkers.has(conversationId)) {
-        return { ok: false, code: "CONVERSATION_BUSY", message: "Still working on your last message — one moment." };
-      }
+      return runTurn(userId, conversationId, "message", (text_) => workflowStore.applyUserText(userId, conversationId, text_, approvalId), {
+        text,
+        clientMessageId,
+      });
+    },
 
-      const run = repo.createRun(conversationId, userId, "message", clock.now().getTime());
-      busyMarkers.add(conversationId);
-      const trace = startTrace(db, clock, run.id);
-      trace.record("run_started", { trigger: "message", conversationId, userId, phase: "collecting" });
-      // save all messages and state as they are produced (NFR-5: state before tool calls)
-      repo.addMessage(conversationId, run.id, "user", text, [], clock.now().getTime(), clientMessageId);
-      try {
-        // read (model call 1) — the workflow store applies and answers (U17+)
-        const gateway = createToolGateway({ db, clock, settings: mockSettings, forced, seed: deps.mock?.seed ?? DEFAULT_SEED, userId, trace });
-        workflowStore.useRun({ trace, search: gateway.searchProviders, hold: gateway.holdSlot });
-        const outcome: ApplyOutcome = await workflowStore.applyUserText(userId, conversationId, text).finally(() => workflowStore.useRun(undefined));
-        const toolCalls = gateway.toolCallsUsed();
-        const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
-        trace.record("model_call", { job: "read", input: text, output: outcome.code ?? "applied" });
-        trace.record("model_call", { job: "write", output: replyText });
-        const endedAt = clock.now().getTime();
-        const runOutcome = outcome.code === "unknown_error" ? "error" : "completed"; // conversation-level errors complete the run (§2.5.3)
-        repo.finishRun(run.id, runOutcome, endedAt, 2, toolCalls);
-        trace.record("run_ended", { outcome: runOutcome, modelCalls: 2, toolCalls });
-        const saved = repo.addMessage(conversationId, run.id, "agent", replyText, (outcome.parts ?? []) as ReplyPart[], endedAt);
-        return { ok: true, reply: toReply(run, saved) };
-      } finally {
-        busyMarkers.delete(conversationId);
+    /** Approve / Decline buttons (§ 2.5.5): a run with trigger `approval_decision`. */
+    decideApproval: async (userId: string, approvalId: string, decision: unknown): Promise<SendResult> => {
+      if (decision !== "approve" && decision !== "decline") {
+        return { ok: false, code: "VALIDATION_ERROR", message: "Field 'decision' must be 'approve' or 'decline'" };
       }
+      const record = approvals.getById(approvalId);
+      if (!record || record.user_id !== userId) return { ok: false, code: "NOT_FOUND", message: "Approval doesn't exist" };
+      return runTurn(userId, record.conversation_id, "approval_decision", async () =>
+        workflowStore.decide(record.conversation_id, approvalId, decision),
+      );
     },
 
     // expose internals for later units (workflow/booking); not for tests to drive

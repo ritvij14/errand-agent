@@ -5,6 +5,7 @@ import { createApp } from "./app.js";
 import { createClock } from "./shared/clock.js";
 import { DEMO_USERS } from "./shared/demo-users.js";
 import { seedDemoUsers } from "./auth/index.js";
+import { DEFAULT_SEED, seedMockWorld } from "./tools/index.js";
 
 let server: Server;
 let baseUrl: string;
@@ -52,6 +53,7 @@ beforeAll(async () => {
   };
   const app = createApp({ db: testDb.db, clock, model: gatedModel });
   seedDemoUsers(testDb.db, clock.now().getTime());
+  seedMockWorld(testDb.db, { seed: DEFAULT_SEED, clock });
   server = app.listen(0);
   baseUrl = `http://localhost:${(server.address() as { port: number }).port}`;
   await call("alice", "/api/auth/sign-in", "POST", { username: alice.username, password: alice.password });

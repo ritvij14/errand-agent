@@ -33,3 +33,9 @@
 - **The store re-checks** that the pick is among the saved candidates (never trusts the reader). Unclear → "Which slot?" with the options re-shown; no list (or a pick not on it) → `NOTHING_TO_PICK`.
 - **`holding`** runs straight away: `hold_slot` through the run's gateway (`RunTools.hold`). `slot_unavailable` (NFR-3: an answer, not a glitch) → that slot is removed from the candidates, back to `choosing` (or `searching` again if nothing is left). Success → see `docs/features/approval-gate.md`.
 - Rule 2 now also clears `selection` and `hold` when a fact changes. Voiding the open approval on a correction is U20.
+
+## Decisions while a card waits (U20)
+
+- The reader checks decisions first: a **plain** yes / no (whole message) is a decision; a decision word followed by more words is read as a change from the rest of the message (`readDecisionWithChange`: time → a merging time correction, budget → a budget correction, anything unreadable → `unknown`, never an approval). This is why "not this one" declines instead of being taken as a vague pick.
+- In `awaiting_approval` the store routes decisions to `decideOn` (see `docs/features/approval-gate.md`) and re-shows the card for anything unclear. Any fact change voids the open approval first (`user_correction`); a drop voids it (`user_dropped`).
+- The conversation runner's `runTurn` is shared by message runs (2 model calls) and `approval_decision` runs (1 model call — the write; no read).

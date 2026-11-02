@@ -52,4 +52,28 @@ export const approvalRepo = (db: Db) => ({
     );
     return db.prepare(`SELECT * FROM approval WHERE id = ?`).get(id) as ApprovalRecord;
   },
+
+  getById: (id: string): ApprovalRecord | undefined =>
+    db.prepare(`SELECT * FROM approval WHERE id = ?`).get(id) as ApprovalRecord | undefined,
+
+  /** The one waiting (pending or approved) approval of a workflow, if any. */
+  getOpen: (workflowId: string): ApprovalRecord | undefined =>
+    db.prepare(`SELECT * FROM approval WHERE workflow_id = ? AND status IN ('pending','approved')`).get(workflowId) as
+      | ApprovalRecord
+      | undefined,
+
+  /** pending → approved / declined; false when it was no longer pending. */
+  decide: (id: string, status: "approved" | "declined", via: "button" | "typed", now: number): boolean =>
+    db
+      .prepare(`UPDATE approval SET status = ?, decided_via = ?, decided_at = ? WHERE id = ? AND status = 'pending'`)
+      .run(status, via, now, id).changes === 1,
+
+  /** pending / approved → voided, with the reason (§ 2.5.5 life step 4). */
+  voidOpen: (id: string, reason: string, now: number): boolean =>
+    db
+      .prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status IN ('pending','approved')`)
+      .run(reason, now, id).changes === 1,
 });
+
+/** A pending approval older than the hold's lifetime is stale (§ 2.5.5 life step 6). */
+export const APPROVAL_MAX_AGE_MS = 10 * 60 * 1000;

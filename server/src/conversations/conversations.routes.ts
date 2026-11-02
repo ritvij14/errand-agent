@@ -89,7 +89,19 @@ export const createConversationsRouter = (deps: ConversationsRouterDeps): Router
         req.params.id!,
         req.body?.text as string | undefined,
         req.body?.clientMessageId as string | undefined,
+        typeof req.body?.approvalId === "string" ? req.body.approvalId : undefined,
       );
+      if (!result.ok) return fail(res, result);
+      res.status(200).json({ data: result.reply });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Approve / Decline buttons (§ 2.5.5) — a run in the approval's conversation
+  router.post("/approvals/:id/decision", async (req, res, next) => {
+    try {
+      const result = await service.decideApproval(userIdOf(req)!, req.params.id!, req.body?.decision);
       if (!result.ok) return fail(res, result);
       res.status(200).json({ data: result.reply });
     } catch (err) {

@@ -6,7 +6,7 @@ import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-wind
 import type { Trace } from "../tracing/index.js";
 import type { ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, searchRange, type OptionBlock } from "./options.js";
-import { approvalCardPart, approvalRepo } from "../approval/index.js";
+import { APPROVAL_MAX_AGE_MS, approvalCardPart, approvalRepo, type ApprovalRecord } from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
 // Facts → candidates → selection → hold → approval build one on top of the other; a
@@ -187,7 +187,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
-    applyUserText: async (userId: string, conversationId: string, text: string): Promise<ApplyOutcome> => {
+    applyUserText: async (userId: string, conversationId: string, text: string, approvalId?: string): Promise<ApplyOutcome> => {
       const active = getActive(conversationId);
       const shown = active?.phase === "choosing" ? (active.candidates as OptionBlock[] | null) ?? undefined : undefined;
       const read: ReadResult = await model.read({ text, waitingFor: active?.phase ?? "nothing", clock, options: shown });
@@ -205,6 +205,15 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         return advance(saved.workflow);
       }
 
+      if (active?.phase === "awaiting_approval") {
+        // § 2.5.5 rule 1: a typed yes answers the card it carries, else the one waiting
+        if (read.kind === "decision") return decideOn(active, approvalId, read.decision === "yes" ? "approve" : "decline", "typed");
+        if (read.kind === "unknown") {
+          const open = approvals.getOpen(active.id);
+          if (open) return cardOutcome(active, open, "I didn't catch that — approve or decline the booking below.");
+        }
+      }
+
       if (read.kind === "unknown" || read.kind === "decision") {
         // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
         const phase = getActive(conversationId)?.phase ?? "collecting";
@@ -214,6 +223,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (read.kind === "drop") {
         const current = getActive(conversationId);
         if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+        voidOpenApproval(current, "user_dropped");
         const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, phase: "abandoned", pending_question: null }));
         trace?.record("state_transition", { fromPhase: current.phase, toPhase: "abandoned", reason: "user dropped" });
         return { phase: "abandoned", reply: "Okay, dropped. Nothing was booked.", facts: {} as Facts, code: saved.ok ? undefined : "unknown_error" };
@@ -253,6 +263,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       return flags.timeOutOfRange
         ? { phase: saved.workflow.phase, reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.", facts: saved.workflow.facts, code: TIME_OUT_OF_RANGE }
         : advance(saved.workflow);
+    },
+
+    /** The Approve / Decline buttons (§ 2.5.5): the same rules as a typed answer. */
+    decide: (conversationId: string, approvalId: string, decision: "approve" | "decline"): ApplyOutcome => {
+      const active = getActive(conversationId);
+      if (!active) return { phase: "none", reply: "That approval is no longer valid — nothing is waiting for your approval.", facts: {} as Facts, code: "APPROVAL_STALE" };
+      return decideOn(active, approvalId, decision, "button");
     },
 
     /** Save search results (U18 calls the tool; this stores them on the workflow). */
@@ -323,6 +340,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
     const phase = phaseAfterChange(current, factChanged || timeChanged, facts);
     const changed = factChanged || timeChanged; // rule 2: what was built on the facts clears
+    if (changed) voidOpenApproval(current, "user_correction");
     const saved = saveWorkflow(conversationId, current.version, (w) => ({
       ...w,
       facts,
@@ -347,6 +365,56 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       }
     }
     return advance(savedWorkflow);
+  }
+
+  function voidOpenApproval(w: WorkflowRow, reason: string): void {
+    const open = approvals.getOpen(w.id);
+    if (open && approvals.voidOpen(open.id, reason, nowMs())) {
+      trace?.record("approval_event", { approvalId: open.id, event: "voided", voidReason: reason });
+    }
+  }
+
+  function cardOutcome(w: WorkflowRow, record: ApprovalRecord, reply: string, code?: string): ApplyOutcome {
+    const name = (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === record.provider_id)?.provider.name ?? record.provider_id;
+    return { phase: w.phase, reply, facts: w.facts, parts: [approvalCardPart(record, name)], ...(code ? { code } : {}) };
+  }
+
+  /**
+   * Approve or decline (§ 2.5.5): only the card the user was shown, only while it is
+   * pending and fresh. Anything else is APPROVAL_STALE / APPROVAL_ALREADY_USED, and
+   * the current details are shown again.
+   */
+  function decideOn(w: WorkflowRow, approvalId: string | undefined, decision: "approve" | "decline", via: "button" | "typed"): ApplyOutcome {
+    const open = approvals.getOpen(w.id);
+    const target = approvalId ? approvals.getById(approvalId) : open;
+    if (target && target.id === open?.id && target.status === "approved") {
+      return cardOutcome(w, target, "You've already approved this booking.", "APPROVAL_ALREADY_USED");
+    }
+    if (!target || !open || target.id !== open.id || target.status !== "pending") {
+      // R2: an old card's id never decides the current card
+      return open
+        ? cardOutcome(w, open, "That approval is no longer valid — the details changed. Here is the current one.", "APPROVAL_STALE")
+        : { phase: w.phase, reply: "That approval is no longer valid — nothing is waiting for your approval.", facts: w.facts, code: "APPROVAL_STALE" };
+    }
+    if (nowMs() - target.created_at > APPROVAL_MAX_AGE_MS) {
+      voidOpenApproval(w, "expired");
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, hold: null, phase: "holding" }));
+      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      const fresh = advance(saved.workflow); // re-hold the same slot → a new card
+      return { ...fresh, reply: `That approval expired after 10 minutes, so I checked again. ${fresh.reply}`, code: "APPROVAL_STALE" };
+    }
+    const status = decision === "approve" ? "approved" : "declined";
+    approvals.decide(target.id, status, via, nowMs());
+    trace?.record("approval_event", { approvalId: target.id, event: status, via, action: target.action, providerId: target.provider_id, slot: target.slot, price: target.price });
+    if (decision === "approve") {
+      // U21 executes from `executing`; until then the approved booking waits here
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "executing" }));
+      return { phase: "executing", reply: "Approved.", facts: (saved.workflow ?? w).facts };
+    }
+    // R9: decline goes back by intent — a booking returns to the same options
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, selection: null, hold: null, phase: "choosing" }));
+    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    return optionsOutcome(saved.workflow, "Okay, not that one. Here are the options again.");
   }
 
   function optionsOutcome(w: WorkflowRow, reply: string): ApplyOutcome {

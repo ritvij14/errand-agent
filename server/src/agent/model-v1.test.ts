@@ -87,3 +87,18 @@ describe("corrections (R9)", () => {
     expect(await read("confirm")).toMatchObject({ kind: "decision", decision: "yes" });
   });
 });
+describe("only a plain yes counts (§ 2.5.5 rule 2)", () => {
+  it("plain yes / no phrases are decisions", async () => {
+    for (const text of ["yes", "Yes!", "confirm", "go ahead", "book it", "ok"]) expect(await read(text)).toEqual({ kind: "decision", decision: "yes" });
+    for (const text of ["no", "decline", "not this one"]) expect(await read(text)).toEqual({ kind: "decision", decision: "no" });
+  });
+
+  it("a yes or no carrying a change is a correction, never an approval", async () => {
+    expect(await read("yes but 11am")).toMatchObject({ kind: "correction", target: "time_window", mergeTime: true });
+    expect(await read("yes, but make the budget ₹900")).toMatchObject({ kind: "correction", target: "budget", budget: 900 });
+  });
+
+  it("a yes with words we can't read is not an approval either", async () => {
+    expect((await read("yes but hmm")).kind).toBe("unknown");
+  });
+});

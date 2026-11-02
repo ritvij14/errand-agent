@@ -261,7 +261,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U20 Approval decisions
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/approval.flow.test.ts` (13: approve by button / typed / waiting card, already approved, decline back to choosing, "yes but 11am" voids + merges, correction and drop voids, old card id → stale (R2), 10-min expiry → fresh card, another user → NOT_FOUND, bad decision), `model-v1.test.ts` plain-yes rule, HTTP tests in `conversations.test.ts` (200 / 404 / 400 / 401); suite 174/174, evals 4/4. QA `/tmp/verify-U20/drive.txt`: rows `approved/button`, `approved/typed`, `voided/user_correction`; bob → HTTP 404.
 - **Depends on.** U19.
 - **Covers.** MH-2, FR-10, § 2.5.5 typed-yes rules and life of an approval, R2, R9 (decline by intent, pending question).
 - **Build.** `POST /api/approvals/:id/decision` (button). Typed plain yes answers only the card id the message carries. "Yes but 11am" voids and applies the change. Decline in a book flow goes back to `choosing` with facts kept. Voiding on provider, slot or price change, correction or task switch. A pending approval older than 10 minutes becomes `APPROVAL_STALE` with fresh details. `approval_event` trace events. Nothing executes yet; an approved book waits for U21.
