@@ -190,7 +190,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U14 Client skeleton: sign-in, conversations, plain chat
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 4 RTL tests green (2 SignIn field-error/submission/pending, fetch-boundary structural check); root `npm test` = server Vitest → evals → client. QA `/tmp/verify-U14/proxy.txt`: page 200, `/api` proxied through :5173, client build clean.
 - **Depends on.** U12.
 - **Covers.** FR-1 (page), § 2.4 chat page, AGENTS.md client rules.
 - **Build.** Add Vitest and React Testing Library to `client`. One API client module that sends the CSRF headers. TanStack Query hooks. Sign-in and sign-up screens with inline field errors, a conversation list with a new-conversation button, and a chat view with text messages. Send is disabled while a reply is pending. Root `npm test` includes client tests.

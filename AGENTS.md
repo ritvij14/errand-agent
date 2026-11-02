@@ -279,7 +279,7 @@ Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shap
 | Memory & preferences | docs/features/memory-preferences.md | MH-6                                  | Planned |
 | Traces               | docs/features/traces.md             | MH-7                                  | Planned |
 | Eval suite           | docs/features/eval-suite.md         | MH-8, deliverable 3                   | Planned |
-| Web frontend         | docs/features/web-frontend.md       | Deliverable 6 demo                    | Planned |
+| Web frontend         | docs/features/web-frontend.md       | Deliverable 6 demo                    | Building |
 
 ---
 
