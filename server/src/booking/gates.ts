@@ -22,7 +22,7 @@ const startOperation = (
   db: Db,
   clock: Clock,
   approvalId: string,
-  kind: "book" | "cancel",
+  kind: "book" | "cancel" | "reschedule",
   matches: (approval: ApprovalRecord) => boolean,
   sent: Record<string, unknown>, // exactly what the tool is sent
   bookingId: string | null,
@@ -103,6 +103,25 @@ export const startCancelOperation = (
     alsoInTransaction,
   );
 
+/** Gate 1 for a reschedule: the approval names this booking and exactly this new slot. */
+export const startRescheduleOperation = (
+  db: Db,
+  clock: Clock,
+  approvalId: string,
+  request: { bookingId: string; newSlot: string },
+  alsoInTransaction?: () => void,
+): GateResult =>
+  startOperation(
+    db,
+    clock,
+    approvalId,
+    "reschedule",
+    (a) => a.booking_id === request.bookingId && a.slot === request.newSlot,
+    { bookingId: request.bookingId, newSlot: request.newSlot },
+    request.bookingId,
+    alsoInTransaction,
+  );
+
 /**
  * Gate 2, handed to the tool gateway: a write runs only for this user's persisted
  * in-flight operation of that kind, whose approval is `used`, with the operation's own request.
@@ -110,10 +129,10 @@ export const startCancelOperation = (
 export const authorizeWrite =
   (db: Db, userId: string) =>
   (tool: string, args: Record<string, unknown>): boolean => {
-    if (tool !== "book" && tool !== "cancel") return false; // reschedule gets its own check with its unit
+    if (tool !== "book" && tool !== "cancel" && tool !== "reschedule") return false;
     const op = operationRepo(db).byKey(String(args.idempotencyKey));
     if (!op || op.user_id !== userId || op.kind !== tool || op.status !== "in_flight") return false;
     if (approvalRepo(db).getById(op.approval_id)?.status !== "used") return false;
-    const sent = JSON.parse(op.request) as { holdId?: string; bookingId?: string };
-    return tool === "book" ? sent.holdId === args.holdId : sent.bookingId === args.bookingId;
+    const sent = JSON.parse(op.request) as Record<string, unknown>;
+    return Object.keys(sent).every((key) => sent[key] === args[key]); // exactly the operation's own request
   };

@@ -5,16 +5,19 @@ import type { AgentModel, ReadResult } from "./index.js";
 import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
 import type { Trace } from "../tracing/index.js";
 import type { BookingRecord, ProviderSummary, ToolResult } from "../tools/index.js";
-import { buildOptions, searchRange, slotLabel, type OptionBlock } from "./options.js";
+import { buildOptions, movePickText, searchRange, slotLabel, type OptionBlock } from "./options.js";
 import {
   executeBook,
   executeCancel,
+  executeReschedule,
   MAX_BOOK_ATTEMPTS,
   operationRepo,
   startBookOperation,
   startCancelOperation,
+  startRescheduleOperation,
   type BookTools,
   type CancelTools,
+  type RescheduleTools,
   type OperationRecord,
 } from "../booking/index.js";
 import { findService } from "./model.js";
@@ -23,6 +26,7 @@ import {
   approvalCardPart,
   approvalRepo,
   type ApprovalRecord,
+  type NewApproval,
 } from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
@@ -90,6 +94,7 @@ export type RunTools = {
   list?: ListTool;
   book?: BookTools;
   cancel?: CancelTools;
+  reschedule?: RescheduleTools;
   model?: AgentModel;
 };
 
@@ -160,6 +165,8 @@ const nameOf = (w: WorkflowRow, providerId: string): string =>
   providerId;
 const rupees = (n: number): string => `₹${n.toLocaleString("en-IN")}`;
 
+const CHANGE_VERB = { cancel: "cancel", reschedule: "move" } as const;
+
 /** One row of a `bookings_list` part (FR-5): what the page shows for a booking. */
 const listItem = (b: BookingRecord) => ({
   id: b.id,
@@ -190,6 +197,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   let list: ListTool | undefined;
   let bookTools: BookTools | undefined;
   let cancelTools: CancelTools | undefined;
+  let rescheduleTools: RescheduleTools | undefined;
   /** the run's counted model (caps, NFR-1); the store's own model outside a run */
   let runModel: AgentModel | undefined;
   const approvals = approvalRepo(db);
@@ -315,6 +323,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       list = run?.list;
       bookTools = run?.book;
       cancelTools = run?.cancel;
+      rescheduleTools = run?.reschedule;
       runModel = run?.model;
     },
 
@@ -334,7 +343,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
 
       if (read.kind === "list_bookings") return listMyBookings(active);
-      if (read.kind === "cancel") return startCancel(userId, conversationId, active, text);
+      if (read.kind === "cancel") return startChange("cancel", userId, conversationId, active, text);
+      if (read.kind === "reschedule") return startChange("reschedule", userId, conversationId, active, text, read.timeWindow);
       if (active?.phase === "identifying_booking" && read.kind !== "drop") return identifyTarget(active, text);
 
       if (read.kind === "pick" || read.kind === "pick_unclear") {
@@ -509,10 +519,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const w = getActive(conversationId);
       if (!w || (w.phase !== "executing" && w.phase !== "verifying")) return undefined;
       const op = operations.inFlightFor(w.id);
-      if (op?.kind === "cancel") {
+      if (op && op.kind !== "book") {
         // § 2.5.6: retry only while the approval is fresh (10 min, like a hold); else just read the booking
         const fresh = nowMs() - approvals.getById(op.approval_id)!.created_at < APPROVAL_MAX_AGE_MS;
-        return fresh ? executeCancelOp(w, op) : settleCancelByList(w, op, "The server restarted before your cancellation finished.");
+        return fresh ? executeChangeOp(w, op) : settleChangeByList(w, op, "The server restarted before your change finished.");
       }
       return op ? recoverOperation(w, op) : undefined;
     },
@@ -527,10 +537,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const w = getActive(conversationId);
       const op = w ? operations.inFlightFor(w.id) : undefined;
       if (!w || !op) return "Something went wrong on our side, so I stopped. Nothing was booked or changed — please send that again.";
-      if (op.kind === "cancel") {
+      if (op.kind !== "book") {
         return (
-          settleCancelByList(w, op, "Something went wrong on our side.")?.reply ??
-          "Something went wrong on our side. I couldn't confirm whether your booking was cancelled — don't cancel again yet. Message me in a moment and I'll check again."
+          settleChangeByList(w, op, "Something went wrong on our side.")?.reply ??
+          "Something went wrong on our side. I couldn't confirm whether your booking changed — don't try again yet. Message me in a moment and I'll check again."
         );
       }
       let checked: ReturnType<BookTools["status"]> | undefined;
@@ -642,7 +652,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       facts,
       phase,
       ...(changed ? { candidates: null, selection: null, hold: null } : {}),
-      intent: (values.intent as WorkflowRow["intent"]) ?? w.intent,
+      intent: w.intent ?? (values.intent as WorkflowRow["intent"]), // a correction never switches the task (U30 asks first)
     }));
     if (!saved.ok || !saved.workflow)
       return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
@@ -684,6 +694,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       ? (JSON.parse(op.result) as { bookingId?: string; checkedStatus?: string; error?: string })
       : {};
     const cancel = record.action === "cancel";
+    if (record.action === "reschedule" && op?.status === "succeeded") {
+      return { phase: w.phase, reply: `Already moved: ${what}. Booking id: ${record.booking_id}. I didn't send it again.`, facts: w.facts, code: "APPROVAL_ALREADY_USED" };
+    }
     const reply =
       op?.status === "succeeded"
         ? cancel
@@ -783,7 +796,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const started =
         target.action === "cancel"
           ? startCancelOperation(db, clock, target.id, { bookingId: target.booking_id! }, toExecuting)
-          : startBookOperation(
+          : target.action === "reschedule"
+            ? startRescheduleOperation(db, clock, target.id, { bookingId: target.booking_id!, newSlot: target.slot }, toExecuting)
+            : startBookOperation(
               db,
               clock,
               target.id,
@@ -851,50 +866,46 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    */
   function awaitApproval(w: WorkflowRow, held: Held, reply?: string): ApplyOutcome {
     const selection = w.selection!;
+    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.price;
+    return openApproval(
+      w,
+      { action: "book", provider_id: selection.providerId, slot: selection.slot, price: held.quotedPrice, hold_id: held.holdId }, // V-2: the quoted price
+      { hold: held },
+      nameOf(w, selection.providerId),
+      (record) =>
+        reply ??
+        (searchPrice !== undefined && record.price !== searchPrice
+          ? `The provider quoted ${rupees(record.price)} for this slot (the search showed ${rupees(searchPrice)}). Approve to book it at the new price, or decline.`
+          : `Here are the details — approve to book, or decline.`),
+    );
+  }
+
+  /**
+   * One pending approval for the workflow (§ 2.5.5): the workflow moving to
+   * `awaiting_approval` and the approval insert share one transaction; the card is drawn
+   * from the stored record, never from model text.
+   */
+  function openApproval(
+    w: WorkflowRow,
+    input: Omit<NewApproval, "user_id" | "conversation_id" | "workflow_id">,
+    patch: Partial<WorkflowRow>,
+    providerName: string,
+    reply: (record: ApprovalRecord) => string,
+  ): ApplyOutcome {
     const result = db.transaction(() => {
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
-        ...wf,
-        hold: held,
-        phase: "awaiting_approval",
-      }));
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, ...patch, phase: "awaiting_approval" }));
       if (!saved.ok || !saved.workflow) return undefined;
-      const record = approvals.createPending(
-        {
-          user_id: w.user_id,
-          conversation_id: w.conversation_id,
-          workflow_id: w.id,
-          action: "book",
-          provider_id: selection.providerId,
-          slot: selection.slot,
-          price: held.quotedPrice, // V-2: the user approves the quoted price
-          hold_id: held.holdId,
-        },
-        nowMs(),
-      );
+      const record = approvals.createPending({ user_id: w.user_id, conversation_id: w.conversation_id, workflow_id: w.id, ...input }, nowMs());
       return { workflow: saved.workflow, record };
     })();
     if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
     const { record } = result;
-    trace?.record("approval_event", {
-      approvalId: record.id,
-      event: "created",
-      action: "book",
-      providerId: record.provider_id,
-      slot: record.slot,
-      price: record.price,
-    });
-    const searchPrice = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)
-      ?.provider.price;
-    const text =
-      reply ??
-      (searchPrice !== undefined && record.price !== searchPrice
-        ? `The provider quoted ${rupees(record.price)} for this slot (the search showed ${rupees(searchPrice)}). Approve to book it at the new price, or decline.`
-        : `Here are the details — approve to book, or decline.`);
+    trace?.record("approval_event", { approvalId: record.id, event: "created", action: record.action, providerId: record.provider_id, slot: record.slot, price: record.price });
     return {
       phase: "awaiting_approval",
-      reply: text,
+      reply: reply(record),
       facts: result.workflow.facts,
-      parts: [approvalCardPart(record, nameOf(w, record.provider_id), slotLabel(record.slot))],
+      parts: [approvalCardPart(record, providerName, slotLabel(record.slot))],
     };
   }
 
@@ -921,7 +932,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    */
   function executeOperation(w: WorkflowRow): ApplyOutcome {
     const op = operations.inFlightFor(w.id)!;
-    if (op.kind === "cancel") return executeCancelOp(w, op);
+    if (op.kind !== "book") return executeChangeOp(w, op);
     let current = w;
     const outcome = executeBook(db, clock, bookTools!, op, () => {
       current =
@@ -985,19 +996,28 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   }
 
   /**
-   * FR-4: a cancel starts its own workflow in `identifying_booking`. A request already in
-   * progress is never dropped silently — the user drops it first (asking comes with U30).
+   * FR-3 / FR-4: a cancel or reschedule starts its own workflow in `identifying_booking`.
+   * A request already in progress is never dropped silently — the user drops it first
+   * (asking comes with U30).
    */
-  function startCancel(userId: string, conversationId: string, active: WorkflowRow | undefined, text: string): ApplyOutcome {
+  function startChange(
+    intent: "cancel" | "reschedule",
+    userId: string,
+    conversationId: string,
+    active: WorkflowRow | undefined,
+    text: string,
+    timeWindow?: TimeWindow,
+  ): ApplyOutcome {
     if (active) {
       return {
         phase: active.phase,
-        reply: "You have a request in progress — say “never mind” to drop it first, then ask me to cancel.",
+        reply: `You have a request in progress — say “never mind” to drop it first, then ask me to ${CHANGE_VERB[intent]} it.`,
         facts: active.facts,
         code: "TASK_IN_PROGRESS",
       };
     }
-    const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent: "cancel", phase: "identifying_booking" }));
+    const facts = (timeWindow ? { time_window: fact("time_window", timeWindow) } : {}) as Facts;
+    const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts, phase: "identifying_booking" }));
     if (!saved.ok || !saved.workflow) return { phase: "none", reply: "", code: "unknown_error", facts: {} as Facts };
     trace?.record("state_transition", { fromPhase: "none", toPhase: "identifying_booking", reason: "workflow started" });
     return identifyTarget(saved.workflow, text);
@@ -1006,11 +1026,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   /**
    * Which upcoming booking? Matched against the user's own `list_bookings` (V-7): a
    * booking id in the text, else the service, else a provider name, else all of them.
-   * Exactly one → a cancel card with that booking's provider, slot and price; none
-   * (`BOOKING_NOT_FOUND`) or several (`BOOKING_AMBIGUOUS`) → stay and ask which.
+   * None (`BOOKING_NOT_FOUND`) or several (`BOOKING_AMBIGUOUS`) → stay and ask which.
+   * One → cancel: a card with the booking's provider, slot and price; reschedule: its
+   * service and area become the search's, then the new time is asked for or searched.
    */
   function identifyTarget(w: WorkflowRow, text: string, bookingId?: string, lead = ""): ApplyOutcome {
-    const listed = cancelTools!.list();
+    const verb = CHANGE_VERB[w.intent as "cancel" | "reschedule"];
+    const listed = list!();
     if (!listed.ok) return { phase: w.phase, reply: "I couldn't read your bookings just now — please try again.", facts: w.facts, code: listed.error };
     const upcoming = listed.data.bookings.filter((b) => b.status === "booked");
     const matches = bookingId ? upcoming.filter((b) => b.id === bookingId) : matchBookings(upcoming, text);
@@ -1018,8 +1040,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const service = findService(text).service;
       const reply =
         matches.length > 1
-          ? "Which booking do you want to cancel? Tell me the service or the booking id."
-          : `I can't find an upcoming ${service ? `${SERVICE_NAMES[service] ?? service} ` : ""}booking to cancel. ${upcoming.length ? "These are your upcoming bookings — which one?" : "You have no upcoming bookings."}`;
+          ? `Which booking do you want to ${verb}? Tell me the service or the booking id.`
+          : `I can't find an upcoming ${service ? `${SERVICE_NAMES[service] ?? service} ` : ""}booking to ${verb}. ${upcoming.length ? "These are your upcoming bookings — which one?" : "You have no upcoming bookings."}`;
       return {
         phase: w.phase,
         reply: lead + reply,
@@ -1029,100 +1051,154 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       };
     }
     const b = matches[0]!;
-    const target: OptionBlock = { provider: { id: b.providerId, name: b.providerName, rating: 0, price: b.price }, slots: [] };
-    const result = db.transaction(() => {
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
-        ...wf,
-        target_booking_id: b.id,
-        candidates: [target], // what the card names: the provider of the booking
-        selection: { providerId: b.providerId, slot: b.slot },
-        phase: "awaiting_approval",
-      }));
-      if (!saved.ok || !saved.workflow) return undefined;
-      const record = approvals.createPending(
-        {
-          user_id: w.user_id,
-          conversation_id: w.conversation_id,
-          workflow_id: w.id,
-          action: "cancel",
-          provider_id: b.providerId,
-          slot: b.slot,
-          price: b.price,
-          booking_id: b.id,
-        },
-        nowMs(),
+    if (w.intent === "cancel") {
+      const target: OptionBlock = { provider: { id: b.providerId, name: b.providerName, rating: 0, price: b.price }, slots: [] };
+      return openApproval(
+        w,
+        { action: "cancel", provider_id: b.providerId, slot: b.slot, price: b.price, booking_id: b.id },
+        { target_booking_id: b.id, candidates: [target], selection: { providerId: b.providerId, slot: b.slot } },
+        b.providerName,
+        () => `${lead}Here are the details — approve to cancel this booking, or decline.`,
       );
-      return { workflow: saved.workflow, record };
-    })();
-    if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
-    const { record } = result;
-    trace?.record("approval_event", { approvalId: record.id, event: "created", action: "cancel", providerId: record.provider_id, slot: record.slot, price: record.price });
-    return {
-      phase: "awaiting_approval",
-      reply: `${lead}Here are the details — approve to cancel this booking, or decline.`,
-      facts: result.workflow.facts,
-      parts: [approvalCardPart(record, b.providerName, slotLabel(b.slot))],
-    };
+    }
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      target_booking_id: b.id,
+      facts: { ...wf.facts, service: fact("service", b.service), area: fact("area", b.area) },
+      phase: wf.facts.time_window ? "searching" : "collecting",
+    }));
+    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    if (saved.workflow.phase === "collecting") {
+      return {
+        phase: "collecting",
+        reply: `${lead}When would you like to move your ${b.providerName} booking (now ${slotLabel(b.slot)}) to?`,
+        facts: saved.workflow.facts,
+      };
+    }
+    return searchReschedule(saved.workflow, b); // just read: no second list_bookings in this run
   }
 
   /**
-   * `executing` a cancel (§ 2.5.6): R3 re-check, the 503 retried with the same key, an
-   * unclear outcome settled by list_bookings. "Cancelled:" only when it happened.
+   * V-3: new slots come from `search_providers` in the booking's area, kept to the booked
+   * provider, without the booking's own slot. V-9: the blocks show the booking's price —
+   * a reschedule keeps it. The booking is re-read each time (no local copy of bookings).
    */
-  function executeCancelOp(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
+  function searchReschedule(w: WorkflowRow, justRead?: BookingRecord): ApplyOutcome {
+    const listed = justRead ? undefined : list!();
+    const b = justRead ?? (listed?.ok ? listed.data.bookings.find((x) => x.id === w.target_booking_id && x.status === "booked") : undefined);
+    if (!b) {
+      const ended = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "failed" }));
+      return { phase: "failed", reply: "That booking isn't upcoming any more, so there's nothing to move.", facts: (ended.workflow ?? w).facts, code: "BOOKING_NOT_FOUND" };
+    }
+    const timeWindow = w.facts.time_window!.value!;
+    const found = search!({ service: b.service, area: b.area, ...searchRange(timeWindow, clock) });
+    if (!found.ok) return { phase: w.phase, reply: "I couldn't reach the provider service just now — try again in a moment.", facts: w.facts, code: found.error };
+    const options = buildOptions(found.data.providers, { timeWindow, budget: undefined });
+    const blocks = (options.ok ? options.blocks : [])
+      .filter((x) => x.provider.id === b.providerId)
+      .map((x) => ({
+        provider: { ...x.provider, price: b.price },
+        slots: x.slots.filter((s) => s.start !== b.slot).map((s) => ({ ...s, pickText: movePickText(b.providerName, s.start) })),
+      }))
+      .filter((x) => x.slots.length > 0);
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: blocks, phase: blocks.length ? "choosing" : "searching" }));
+    if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    if (!blocks.length) {
+      return { phase: "searching", reply: `${b.providerName} has no free slot in that time — want to try another day or time?`, facts: saved.workflow.facts, code: "NO_MATCHES" };
+    }
+    return optionsOutcome(saved.workflow, `${b.providerName} can do these times — tap one and press Confirm. Your price stays ${rupees(b.price)}.`);
+  }
+
+  /** A reschedule has no hold step: the picked slot goes straight to an approval at the booking's price (V-9). */
+  function proposeReschedule(w: WorkflowRow): ApplyOutcome {
+    const selection = w.selection!;
+    const block = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)!;
+    return openApproval(
+      w,
+      { action: "reschedule", provider_id: selection.providerId, slot: selection.slot, price: block.provider.price, booking_id: w.target_booking_id! },
+      {},
+      block.provider.name,
+      () => "Here are the details — approve to move your booking, or decline.",
+    );
+  }
+
+  /**
+   * `executing` a cancel or reschedule (§ 2.5.6): R3 re-check, transient failures retried
+   * with the same key, an unclear outcome settled by list_bookings. The reply claims the
+   * change only when it happened; a reschedule `slot_conflict` goes back to the other times.
+   */
+  function executeChangeOp(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
     const approval = approvals.getById(op.approval_id)!;
-    const outcome = executeCancel(db, clock, cancelTools!, op, { providerId: approval.provider_id, slot: approval.slot });
+    const cancel = op.kind === "cancel";
+    const outcome = cancel
+      ? executeCancel(db, clock, cancelTools!, op, { providerId: approval.provider_id, slot: approval.slot })
+      : executeReschedule(db, clock, rescheduleTools!, op, { providerId: approval.provider_id, price: approval.price });
     trace?.record("operation_event", {
       event: outcome.ok ? "succeeded" : "failed",
-      kind: "cancel",
+      kind: op.kind,
       key: op.idempotency_key,
       result: outcome.ok ? op.booking_id : outcome.checkedStatus,
     });
-    const what = `${nameOf(w, approval.provider_id)} on ${slotLabel(approval.slot)}`;
+    const name = nameOf(w, approval.provider_id);
+    if (!outcome.ok && outcome.kind === "slot_conflict") {
+      return showRemaining(w, w.selection!, `That time was just taken at ${name}, so your booking didn't move — here are the other times.`, "slot_conflict");
+    }
     if (!outcome.ok && outcome.kind === "booking_changed" && approvals.voidUsed(approval.id, "booking_changed", nowMs())) {
       trace?.record("approval_event", { approvalId: approval.id, event: "voided", voidReason: "booking_changed" });
     }
     const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: outcome.ok ? "done" : "failed" }));
     const facts = (finished.workflow ?? w).facts;
-    if (outcome.ok) return { phase: "done", reply: `Cancelled: ${what}. Booking id: ${op.booking_id}.`, facts };
+    if (outcome.ok) {
+      return {
+        phase: "done",
+        reply: cancel
+          ? `Cancelled: ${name} on ${slotLabel(approval.slot)}. Booking id: ${op.booking_id}.`
+          : `Moved: ${name} to ${slotLabel(approval.slot)}, price unchanged at ${rupees(approval.price)}. Booking id: ${op.booking_id}.`,
+        facts,
+      };
+    }
     if (outcome.kind === "booking_changed") {
       return {
         phase: "failed",
-        reply: `That booking changed since you approved (it's now ${outcome.checkedStatus}), so I didn't cancel anything. Ask again if you still want to change it.`,
+        reply: `That booking changed since you approved (it's now ${outcome.checkedStatus}), so I didn't ${CHANGE_VERB[cancel ? "cancel" : "reschedule"]} it. Ask again if you still want to change it.`,
         facts,
         code: "booking_changed",
       };
     }
     return {
       phase: "failed",
-      reply: `Nothing was cancelled — the provider didn't confirm it, and your booking is still ${outcome.checkedStatus}. Ask me to try again.`,
+      reply: cancel
+        ? `Nothing was cancelled — the provider didn't confirm it, and your booking is still ${outcome.checkedStatus}. Ask me to try again.`
+        : `Your booking didn't move — the provider didn't confirm it, and it's still at its old time. Ask me to try again.`,
       facts,
-      code: "CANCEL_FAILED",
+      code: cancel ? "CANCEL_FAILED" : "RESCHEDULE_FAILED",
     };
   }
 
   /**
-   * A cancel whose outcome is unknown (restart with an old approval, or an unknown error):
+   * A change whose outcome is unknown (restart with an old approval, or an unknown error):
    * the booking itself says. Undefined when it can't be read.
    */
-  function settleCancelByList(w: WorkflowRow, op: OperationRecord, failedLead: string): ApplyOutcome | undefined {
-    let listed: ReturnType<CancelTools["list"]> | undefined;
+  function settleChangeByList(w: WorkflowRow, op: OperationRecord, failedLead: string): ApplyOutcome | undefined {
+    let listed: ReturnType<ListTool> | undefined;
     try {
-      listed = cancelTools?.list();
+      listed = list?.();
     } catch {
       listed = undefined;
     }
     const b = listed?.ok ? listed.data.bookings.find((x) => x.id === op.booking_id) : undefined;
     if (!b) return undefined;
+    const { newSlot } = JSON.parse(op.request) as { newSlot?: string };
+    const happened = op.kind === "cancel" ? b.status === "cancelled" : b.status === "booked" && b.slot === newSlot;
     const what = `${b.providerName} on ${slotLabel(b.slot)}`;
-    const cancelled = b.status === "cancelled";
-    operations.finish(op.id, cancelled ? "succeeded" : "failed", { bookingId: op.booking_id, checkedStatus: b.status }, nowMs());
-    trace?.record("operation_event", { event: cancelled ? "succeeded" : "failed", kind: "cancel", key: op.idempotency_key, result: b.status });
-    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: cancelled ? "done" : "failed" }));
+    operations.finish(op.id, happened ? "succeeded" : "failed", { bookingId: op.booking_id, checkedStatus: b.status }, nowMs());
+    trace?.record("operation_event", { event: happened ? "succeeded" : "failed", kind: op.kind, key: op.idempotency_key, result: b.status });
+    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: happened ? "done" : "failed" }));
     const facts = (finished.workflow ?? w).facts;
-    return cancelled
-      ? { phase: "done", reply: `Your booking was cancelled: ${what}. Booking id: ${op.booking_id}.`, facts }
-      : { phase: "failed", reply: `${failedLead} Nothing was cancelled — your booking is still ${b.status}. Ask me again if you still want to cancel it.`, facts };
+    const change = op.kind === "cancel" ? "cancelled" : "moved";
+    return happened
+      ? { phase: "done", reply: `Your booking was ${change}: ${what}. Booking id: ${op.booking_id}.`, facts }
+      : { phase: "failed", reply: `${failedLead} Your booking wasn't ${change} — it's still ${what}. Ask me again if you still want to change it.`, facts };
   }
 
   /** The provider has the booking though the run never finished it: record it and report it. */
@@ -1238,6 +1314,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   /** Phases that need no user input run now (§ 2.5.3 step 6): searching, holding, executing. */
   function advance(w: WorkflowRow): ApplyOutcome {
     if (w.phase === "executing" && bookTools) return executeOperation(w);
+    if (w.phase === "holding" && w.intent === "reschedule") return proposeReschedule(w);
+    if (w.phase === "searching" && w.intent === "reschedule" && search && list) return searchReschedule(w);
     if (w.phase === "holding" && hold) return holdSelection(w);
     if (w.phase !== "searching" || !search) return replyFor(w);
     const service = String(w.facts.service!.value);

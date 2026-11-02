@@ -4,7 +4,7 @@ import { createTestDb } from "../shared/test-db.js";
 import { seedDemoUsers } from "../auth/index.js";
 import { approvalRepo } from "../approval/index.js";
 import { DEFAULT_SEED, seedMockWorld } from "../tools/index.js";
-import { authorizeWrite, startCancelOperation } from "./index.js";
+import { authorizeWrite, startCancelOperation, startRescheduleOperation } from "./index.js";
 
 // Cancel through the two gates (R1, R3): Gate 1 turns an approved cancel approval into
 // one in-flight operation for that booking; Gate 2 lets `cancel` run only for it.
@@ -25,7 +25,7 @@ const world = () => {
     slot: string;
     price: number;
   };
-  const approvedCancel = (conversation: string) => {
+  const approvedChange = (conversation: string, action: "cancel" | "reschedule", slot = booking.slot) => {
     db.prepare(
       `INSERT INTO conversation (id, user_id, title, created_at, updated_at) VALUES (?, ?, 't', 1, 1)`,
     ).run(conversation, ALICE);
@@ -37,9 +37,9 @@ const world = () => {
         user_id: ALICE,
         conversation_id: conversation,
         workflow_id: `w-${conversation}`,
-        action: "cancel",
+        action,
         provider_id: booking.provider_id,
-        slot: booking.slot,
+        slot,
         price: booking.price,
         booking_id: BOOKING,
       },
@@ -48,7 +48,8 @@ const world = () => {
     approvalRepo(db).decide(approval.id, "approved", "button", clock.now().getTime());
     return approval.id;
   };
-  return { testDb, db, clock, approvedCancel };
+  const approvedCancel = (conversation: string) => approvedChange(conversation, "cancel");
+  return { testDb, db, clock, approvedCancel, approvedChange };
 };
 
 describe("cancel gates (R1, R3)", () => {
@@ -101,6 +102,53 @@ describe("cancel gates (R1, R3)", () => {
       authorizeWrite(w.db, ALICE)("cancel", { bookingId: BOOKING, idempotencyKey: "no-such-op:1" }),
     ).toBe(false);
     expect(authorizeWrite(w.db, ALICE)("book", { holdId: "h", idempotencyKey: key })).toBe(false); // a cancel op never books
+    w.testDb.close();
+  });
+});
+
+describe("reschedule gates (R1, R3)", () => {
+  const NEW_SLOT = "2026-11-07T10:00:00+05:30";
+
+  it("Gate 1 needs the approved new slot; the operation sends exactly that booking and slot", () => {
+    const w = world();
+    const approvalId = w.approvedChange("c1", "reschedule", NEW_SLOT);
+    expect(
+      startRescheduleOperation(w.db, w.clock, approvalId, {
+        bookingId: BOOKING,
+        newSlot: "2026-11-07T11:00:00+05:30",
+      }),
+    ).toMatchObject({ ok: false });
+    const started = startRescheduleOperation(w.db, w.clock, approvalId, {
+      bookingId: BOOKING,
+      newSlot: NEW_SLOT,
+    });
+    expect(started).toMatchObject({ ok: true, operation: { kind: "reschedule", booking_id: BOOKING } });
+    w.testDb.close();
+  });
+
+  it("Gate 2: reschedule runs only with the operation's own booking and new slot", () => {
+    const w = world();
+    const started = startRescheduleOperation(w.db, w.clock, w.approvedChange("c1", "reschedule", NEW_SLOT), {
+      bookingId: BOOKING,
+      newSlot: NEW_SLOT,
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const key = started.operation.idempotency_key;
+    expect(
+      authorizeWrite(w.db, ALICE)("reschedule", {
+        bookingId: BOOKING,
+        newSlot: NEW_SLOT,
+        idempotencyKey: key,
+      }),
+    ).toBe(true);
+    expect(
+      authorizeWrite(w.db, ALICE)("reschedule", {
+        bookingId: BOOKING,
+        newSlot: "2026-11-07T11:00:00+05:30",
+        idempotencyKey: key,
+      }),
+    ).toBe(false);
+    expect(authorizeWrite(w.db, ALICE)("cancel", { bookingId: BOOKING, idempotencyKey: key })).toBe(false);
     w.testDb.close();
   });
 });

@@ -14,7 +14,9 @@ export const ApprovalCard = ({ card, onDecide, disabled }: Props) => (
     className="mt-2 rounded border border-neutral-300 bg-white p-2 text-sm"
   >
     <p className="font-medium">
-      {card.action === "cancel" ? "Cancel" : "Book"} {card.provider.name}
+      {card.action === "cancel" ? "Cancel" : card.action === "reschedule" ? "Move" : "Book"}{" "}
+      {card.provider.name}
+      {card.action === "reschedule" ? " to" : ""}
     </p>
     <p>{card.slotLabel}</p>
     <p>{rupees(card.price)}</p>

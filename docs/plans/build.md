@@ -369,7 +369,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U29 Reschedule flow
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/reschedule.flow.test.ts` (only the booked provider's Saturday slots at the booking's price, trace `list_bookings → search_providers`; no time → asks, then offers; pick → reschedule card with the new slot and original price, no hold; approve → `list_bookings → reschedule`, moved, price unchanged; `slot_conflict` → back to that provider's other times, booking unchanged), `booking/cancel-gates.test.ts` reschedule gates, client "Move … to" card. Cancel + reschedule execution folded into `executeChange`; approvals into `openApproval`. Suite 244/244, client 21/21, evals 24/24 (12 new, runner `optionsBlockCount`). QA `/tmp/verify-U29/drive.txt`: alice "Move my AC servicing to Saturday" via `:5173/api` → only Ganesh Cooltech at ₹856 → moved Thu 5 Nov 10:00 → Sat 7 Nov 08:00, ₹856 unchanged.
 - **Depends on.** U28.
 - **Covers.** FR-3, V-3, V-9, R3, R4.
 - **Build.** Identify the booking, collect the new time, search the booked provider only in the booking's area, then choose. The approval uses the booking's price. `slot_conflict` goes back to options without that slot. Re-check before execute.

@@ -31,6 +31,11 @@ describe("ApprovalCard", () => {
     expect(screen.getByRole("group", { name: /approval/i }).textContent).toContain("Cancel Deva Pipe Care");
   });
 
+  it("a reschedule card says it moves the booking to the new slot", () => {
+    render(<ApprovalCard card={{ ...CARD, action: "reschedule" }} onDecide={vi.fn()} disabled={false} />);
+    expect(screen.getByRole("group", { name: /approval/i }).textContent).toContain("Move Deva Pipe Care to");
+  });
+
   it("Approve and Decline report the decision for this card", async () => {
     const user = userEvent.setup();
     const onDecide = vi.fn();

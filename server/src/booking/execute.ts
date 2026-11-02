@@ -82,31 +82,46 @@ const waitBeforeRetry = (
   clock.advanceMs(tools.wait(tools.retryWaitsMs[attempt - 1] ?? tools.retryWaitsMs.at(-1) ?? 0));
 };
 
-export type CancelTools = {
-  cancel: (args: { bookingId: string; idempotencyKey: string }) => ToolResult<{ bookingId: string }>;
+type ChangeTools = {
   list: () => ToolResult<{ bookings: BookingRecord[] }>;
   retryWaitsMs: number[];
   wait: (ms: number) => number;
 };
 
-export type CancelOutcome =
+export type CancelTools = ChangeTools & {
+  cancel: (args: { bookingId: string; idempotencyKey: string }) => ToolResult<{ bookingId: string }>;
+};
+
+export type RescheduleTools = ChangeTools & {
+  reschedule: (args: { bookingId: string; newSlot: string; idempotencyKey: string }) => ToolResult<unknown>;
+};
+
+export type ChangeOutcome =
   | { ok: true }
   /** `checkedStatus` is the booking's status from list_bookings (R5) */
-  | { ok: false; kind: "booking_changed" | "not_cancelled"; checkedStatus: string };
+  | { ok: false; kind: "booking_changed" | "not_changed" | "slot_conflict"; checkedStatus: string };
+export type CancelOutcome = ChangeOutcome;
+export type RescheduleOutcome = ChangeOutcome;
 
 /**
- * Executing a cancel operation (§ 2.5.6 "Cancel and reschedule"). R3: before any call the
- * booking is re-read with list_bookings — it must still be `booked` at the approved
- * provider and slot. A transient failure (the designed first-call 503, V-8) is retried
- * with the same key; an unclear outcome is settled by reading the booking again.
+ * Executing a cancel or reschedule operation (§ 2.5.6 "Cancel and reschedule"). R3: before
+ * any call the booking is re-read with list_bookings and must still be as approved. A
+ * transient failure (the designed first-call 503, V-8) is retried with the same key; a
+ * real answer (`slot_conflict`) is returned as is; an unclear outcome is settled by
+ * reading the booking again.
  */
-export const executeCancel = (
+const executeChange = (
   db: Db,
   clock: Clock,
-  tools: CancelTools,
+  tools: ChangeTools,
   op: OperationRecord,
-  approved: { providerId: string; slot: string },
-): CancelOutcome => {
+  rules: {
+    unchanged: (b: BookingRecord) => boolean;
+    happened: (b: BookingRecord) => boolean;
+    call: () => ToolResult<unknown>;
+    answers?: string[];
+  },
+): ChangeOutcome => {
   const repo = operationRepo(db);
   const now = () => clock.now().getTime();
   const bookingId = op.booking_id!;
@@ -114,19 +129,14 @@ export const executeCancel = (
     const listed = tools.list();
     return listed.ok ? listed.data.bookings.find((b) => b.id === bookingId) : undefined;
   };
-
-  const before = current();
-  if (op.attempts > 0 && before?.status === "cancelled") {
-    // a cancel was already sent for this operation (restart recovery): it went through
+  const succeed = (): ChangeOutcome => {
     repo.finish(op.id, "succeeded", { bookingId }, now());
     return { ok: true };
-  }
-  if (
-    !before ||
-    before.status !== "booked" ||
-    before.providerId !== approved.providerId ||
-    before.slot !== approved.slot
-  ) {
+  };
+
+  const before = current();
+  if (op.attempts > 0 && before && rules.happened(before)) return succeed(); // restart after the call went through
+  if (!before || !rules.unchanged(before)) {
     const checkedStatus = before?.status ?? "not_found";
     repo.finish(op.id, "failed", { error: "booking_changed", checkedStatus }, now());
     return { ok: false, kind: "booking_changed", checkedStatus };
@@ -135,22 +145,52 @@ export const executeCancel = (
   let error = "unknown";
   for (let attempt = 1; attempt <= MAX_BOOK_ATTEMPTS; attempt += 1) {
     repo.recordAttempt(op.id, now());
-    const result = tools.cancel({ bookingId, idempotencyKey: op.idempotency_key });
-    if (result.ok) {
-      repo.finish(op.id, "succeeded", { bookingId }, now());
-      return { ok: true };
-    }
+    const result = rules.call();
+    if (result.ok) return succeed();
     error = result.error;
+    if (rules.answers?.includes(result.error)) {
+      repo.finish(op.id, "failed", { error, checkedStatus: before.status }, now());
+      return { ok: false, kind: "slot_conflict", checkedStatus: before.status };
+    }
     if (!result.transient || attempt === MAX_BOOK_ATTEMPTS) break;
     waitBeforeRetry(clock, tools, attempt);
   }
   // outcome unclear: the booking itself says whether it happened
   const after = current();
-  if (after?.status === "cancelled") {
-    repo.finish(op.id, "succeeded", { bookingId }, now());
-    return { ok: true };
-  }
+  if (after && rules.happened(after)) return succeed();
   const checkedStatus = after?.status ?? "unknown";
   repo.finish(op.id, "failed", { error, checkedStatus }, now());
-  return { ok: false, kind: "not_cancelled", checkedStatus };
+  return { ok: false, kind: "not_changed", checkedStatus };
+};
+
+export const executeCancel = (
+  db: Db,
+  clock: Clock,
+  tools: CancelTools,
+  op: OperationRecord,
+  approved: { providerId: string; slot: string },
+): CancelOutcome =>
+  executeChange(db, clock, tools, op, {
+    unchanged: (b) =>
+      b.status === "booked" && b.providerId === approved.providerId && b.slot === approved.slot,
+    happened: (b) => b.status === "cancelled",
+    call: () => tools.cancel({ bookingId: op.booking_id!, idempotencyKey: op.idempotency_key }),
+  });
+
+/** V-9: the booking keeps its provider and price; only the slot moves. */
+export const executeReschedule = (
+  db: Db,
+  clock: Clock,
+  tools: RescheduleTools,
+  op: OperationRecord,
+  approved: { providerId: string; price: number },
+): RescheduleOutcome => {
+  const { newSlot } = JSON.parse(op.request) as { newSlot: string };
+  return executeChange(db, clock, tools, op, {
+    unchanged: (b) =>
+      b.status === "booked" && b.providerId === approved.providerId && b.price === approved.price,
+    happened: (b) => b.status === "booked" && b.slot === newSlot,
+    call: () => tools.reschedule({ bookingId: op.booking_id!, newSlot, idempotencyKey: op.idempotency_key }),
+    answers: ["slot_conflict"],
+  });
 };

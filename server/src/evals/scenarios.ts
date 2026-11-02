@@ -451,4 +451,31 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "expect", phase: "failed", replyContains: "changed", lastRunToolCalls: ["list_bookings:ok"] },
     ],
   },
+  // ——— reschedule (FR-3, V-3, V-9, U29) ———
+  "12": {
+    id: "12",
+    name: "Reschedule: slot conflict → back to the same provider's options → rescheduled at the same price",
+    description:
+      "V-3: only the booked provider's slots are offered; V-9: the approval shows the booking's price; slot_conflict removes the slot and the next pick moves the booking.",
+    seed: "eval-seed",
+    user: "alice",
+    steps: [
+      { step: "say", text: "move my AC servicing to Saturday" },
+      { step: "expect", phase: "choosing", optionsBlockCount: 1, replyContains: "price stays" },
+      { step: "pick" },
+      { step: "expect", phase: "awaiting_approval", cardMatchesApproval: true },
+      { step: "force", tool: "reschedule", outcome: "slot_conflict" },
+      { step: "click", decision: "approve" },
+      { step: "expect", phase: "choosing", optionsBlockCount: 1, replyContains: "didn't move" },
+      { step: "pick" },
+      { step: "force", tool: "reschedule", outcome: "ok" },
+      { step: "click", decision: "approve" },
+      {
+        step: "expect",
+        phase: "done",
+        replyContains: "price unchanged",
+        lastRunToolCalls: ["list_bookings:ok", "reschedule:ok"],
+      },
+    ],
+  },
 };

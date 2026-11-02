@@ -34,6 +34,8 @@ export type EvalScenarioStep =
       facts?: Record<string, unknown>;
       /** the last reply's option blocks: present, and every provider price at most this */
       optionsPriceAtMost?: number;
+      /** the last reply's option blocks: exactly this many providers (V-3: a reschedule offers only the booked one) */
+      optionsBlockCount?: number;
       /** the last reply's approval card equals the stored approval record (§ 2.5.5) */
       cardMatchesApproval?: boolean;
       /** the card's price differs from the picked option's search price (V-2) */
@@ -251,6 +253,11 @@ export const runScenario = async (
               `expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`,
             );
         }
+      }
+      if (step.optionsBlockCount !== undefined) {
+        const blocks = (partOf("option_blocks")?.blocks ?? []) as unknown[];
+        if (blocks.length !== step.optionsBlockCount)
+          recordFailure(`expect ${step.optionsBlockCount} provider block(s) → got ${blocks.length}`);
       }
       if (step.optionsPriceAtMost !== undefined) {
         const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as

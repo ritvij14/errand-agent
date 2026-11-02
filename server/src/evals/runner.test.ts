@@ -20,7 +20,8 @@ describe("the eval runner", () => {
       let queuedBooks = 0;
       let cardFromPick = false; // only the first approve of a picked slot's card reaches `book`
       return s.steps.some((step) => {
-        if (step.step === "force" && step.tool === "book") queuedBooks += 1;
+        // the write an approve after a pick makes: `book`, or `reschedule` for a moved booking
+        if (step.step === "force" && (step.tool === "book" || step.tool === "reschedule")) queuedBooks += 1;
         if (step.step === "pick") cardFromPick = true;
         const approves =
           (step.step === "click" && step.decision === "approve") ||

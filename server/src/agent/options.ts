@@ -29,6 +29,8 @@ export const slotLabel = (slot: string): string => {
 
 /** "Book Deva Pipe Care on Tue 3 Nov at 10:00". */
 export const pickText = (providerName: string, slot: string): string => `Book ${providerName} on ${slotLabel(slot)}`;
+/** A reschedule's slot: the same reader matches the provider name and the time. */
+export const movePickText = (providerName: string, slot: string): string => `Move to ${slotLabel(slot)} with ${providerName}`;
 
 export type OptionsResult =
   | { ok: true; blocks: OptionBlock[] }

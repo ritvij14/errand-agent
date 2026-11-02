@@ -136,6 +136,12 @@ export const createConversationService = (deps: ConversationsDeps) => {
           retryWaitsMs: mockSettings.retryWaitsMs,
           wait: budget.wait,
         },
+        reschedule: {
+          reschedule: gateway.reschedule,
+          list: gateway.listBookings,
+          retryWaitsMs: mockSettings.retryWaitsMs,
+          wait: budget.wait,
+        },
       });
       try {
         // § 2.5.2 rule 5: a booking cut off by a restart is finished before the new input is read

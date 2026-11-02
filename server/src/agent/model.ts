@@ -18,6 +18,8 @@ export type ReadResult =
   | { kind: "list_bookings" }
   /** FR-4: "cancel my AC servicing" — which booking is matched against the user's own list */
   | { kind: "cancel" }
+  /** FR-3: "move my AC servicing to Saturday" — the time, when given, is the new time */
+  | { kind: "reschedule"; timeWindow?: TimeWindow }
   /** the model's read can't be used (only an eval can force this with the scripted model); read again */
   | { kind: "unusable" };
 
@@ -71,7 +73,9 @@ export const AREA_SYNONYMS: Record<string, string> = {
 };
 
 const DROP_RE = /never mind|forget it|stop|not that|don't need|cancel that/i;
-const CANCEL_RE = /\bcancel\b/i; // "cancel that" is a drop (DROP_RE is checked first)
+const CANCEL_RE = /\bcancel\b/i;
+// "move it to 11" stays a correction; only "move my …" / "reschedule" starts a reschedule
+const RESCHEDULE_RE = /\breschedule\b|\bmove my\b/i; // "cancel that" is a drop (DROP_RE is checked first)
 const LIST_BOOKINGS_RE = /\b(show|list|see|view|what are|what's)\b[^.?!]*\bbookings?\b|^\s*my bookings\b/i;
 // § 2.5.5 rule 2: only a *plain* yes approves — the whole message is the decision word
 const PLAIN_YES = /^\s*(yes|yeah|yep|sure|confirm|approve|go ahead|book it|fine|ok|okay)[\s.,!]*$/i;
@@ -128,6 +132,10 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
   const pick = options ? readPick(text, options, clock) : undefined;
   if (pick) return pick;
   if (VAGUE_PICK_RE.test(text)) return { kind: "pick_unclear" };
+  if (RESCHEDULE_RE.test(text)) {
+    const parsed = parseTimeWindow(text, clock);
+    return { kind: "reschedule", ...(parsed.ok ? { timeWindow: parsed.data } : {}) };
+  }
 
   // corrections carry content: a trigger word plus what changes
   const DAY_RE = /\b(saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/i;

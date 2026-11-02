@@ -369,14 +369,17 @@ export const reschedule = (
     args.newSlot.slice(0, 10),
   ).includes(args.newSlot);
   const attempt = nextAttempt(db, "reschedule", args.idempotencyKey);
+  const forced = forcedOutcome(opts, "reschedule"); // "ok" | "slot_conflict" (NFR-4)
   const conflict =
-    !isFree ||
+    forced === "slot_conflict" ||
+    (forced !== "ok" && !isFree) ||
+    (forced === undefined &&
     randomDraw({
       seed: opts.seed,
       tool: "reschedule_conflict",
       inputs: [booking.provider_id, args.newSlot],
       attempt,
-    }) < opts.settings.slotConflictProb;
+    }) < opts.settings.slotConflictProb);
   if (conflict) {
     db.transaction(() => {
       db.prepare(

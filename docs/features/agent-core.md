@@ -53,3 +53,11 @@
 - **Identifying** (`identifyTarget`, pure match in `matchBookings`): the user's own `list_bookings`, upcoming (`booked`) only — a booking id in the text, else the service (`findService`), else a provider name, else all upcoming. One match → a cancel card (approval `action: cancel`, the booking's provider, slot, price and `booking_id`; the workflow keeps `target_booking_id`, and `candidates` holds the target as one provider block so the card and reply can name it). None → `BOOKING_NOT_FOUND`, several → `BOOKING_AMBIGUOUS`: stay in `identifying_booking`, list the upcoming bookings (`bookings_list`) and ask which; the next message is matched the same way.
 - **Decline ends it** (R9): workflow `abandoned`, "I kept your booking. Nothing was cancelled." An expired cancel card re-identifies the same booking for a fresh card.
 
+## Reschedule (U29, FR-3, V-3, V-9)
+
+- **Reading:** "reschedule …" or "move my …" → `{ kind: "reschedule", timeWindow? }` (the time in the same message is the new time). Checked after picks, so a reschedule's own pick text never restarts it; "move it to 11" stays a correction.
+- **Flow:** `identifying_booking` (same matching as cancel) → the booking's service and area become the workflow's facts → `collecting` asks "When would you like to move your {provider} booking (now {slot}) to?" unless a time was given → `searching` (`searchReschedule`): `search_providers` in the booking's area, kept to the **booked provider only** (V-3), the booking's own slot removed, each block showing the **booking's price** (V-9), pick text "Move to {slot} with {provider}" (`movePickText`) → `choosing` → a pick goes straight to `awaiting_approval` (no hold, `proposeReschedule`) with the booking's price → `executing`.
+- The booking is re-read with `list_bookings` whenever a later run needs it (no local copy of bookings); when the search follows identification in the same run it reuses that read.
+- **One approval helper:** `openApproval` (save `awaiting_approval` + insert the pending approval in one transaction, trace it, draw the card) serves book, cancel and reschedule.
+- A correction never switches the workflow's intent (`applyToWorkflow` keeps `w.intent`); task switching is U30.
+

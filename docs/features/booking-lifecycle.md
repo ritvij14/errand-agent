@@ -47,12 +47,18 @@
 - Workflow: "Cancelled: {provider} on {slot}. Booking id: X." only when it happened; `booking_changed` → "That booking changed since you approved…", `failed`; not confirmed → "Nothing was cancelled — … still {status}".
 - **Restart / unknown error:** a cancel operation in flight is re-run by `recover` while its approval is under 10 minutes old; older → `settleCancelByList` (read the booking: cancelled → report it, else failed, ask again). `afterUnknownError` words cancels from the same read.
 
+## Reschedule (U29, FR-3, V-3, V-9)
+
+- Cancel and reschedule share one execution, `executeChange` (`booking/execute.ts`): R3 re-check → call with the key → transient failures retried on the same key → a real answer returned → an unclear end settled by `list_bookings`. Per kind only the rules differ: cancel needs the booking `booked` at the approved provider + slot and "happened" = `cancelled`; reschedule needs it `booked` at the approved provider + **price** (V-9) and "happened" = `booked` at the new slot; `slot_conflict` is a real answer (no retry).
+- Gate 1 `startRescheduleOperation`: the approval's `booking_id` and `slot` (the **new** slot) must equal the request; the operation sends `{ bookingId, newSlot }`. Gate 2 compares every field of the operation's own request, for all three tools.
+- Workflow: "Moved: {provider} to {slot}, price unchanged at ₹X." only when it happened; `slot_conflict` → back to the same provider's other times (`showRemaining`), the approval stays used, the operation `failed`.
+- Restart / unknown error: same as cancel (`settleChangeByList` reads whether the booking is at the new slot).
+
 ## Evals
 
-- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking; 15 cancel: 503 → same key → cancelled once (trace `list_bookings → cancel:glitch → cancel:ok`); 15b another conversation cancelled it first → the old approval voided, only `list_bookings` called; 20a/b/c restart mid-booking (booked → reported; `not_found` + hold valid → resumed, same key; `not_found` + hold expired → asks again, nothing booked) using the runner's `restart` step (fresh service on the same database + startup recovery).
+- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking; 12 reschedule: only the booked provider (`optionsBlockCount: 1`), `slot_conflict` → other times → moved at the same price; 15 cancel: 503 → same key → cancelled once (trace `list_bookings → cancel:glitch → cancel:ok`); 15b another conversation cancelled it first → the old approval voided, only `list_bookings` called; 20a/b/c restart mid-booking (booked → reported; `not_found` + hold valid → resumed, same key; `not_found` + hold expired → asks again, nothing booked) using the runner's `restart` step (fresh service on the same database + startup recovery).
 - Every scenario that approves a booking forces its `book` outcome: keys contain the random operation id, so an unforced `book` draws a different result each run (B4). `runner.test.ts` guards this.
 
 ## Not yet
 
-- Recovery for reschedule (U29).
 - A cap hit mid-booking (U25, evals 21b, 21c) leaves the operation `in_flight` on purpose; the next run's recovery resolves it.

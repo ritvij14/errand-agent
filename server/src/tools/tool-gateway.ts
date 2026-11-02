@@ -2,7 +2,7 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, type Trace } from "../tracing/index.js";
 import type { ForcedQueue, WriteOpts } from "./write-tools.js";
-import { book, cancel, getBookingStatus, holdSlot } from "./write-tools.js";
+import { book, cancel, getBookingStatus, holdSlot, reschedule } from "./write-tools.js";
 import {
   getProvider,
   listBookings,
@@ -192,12 +192,19 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         () => (opts.authorizeWrite?.("cancel", { ...args }) ? cancel(db, toolOpts, userId, args) : refuse()),
         (d) => typeof d?.bookingId === "string",
       ),
-    reschedule: (args: { bookingId: string; newSlot: string; idempotencyKey: string }): ToolResult<never> =>
+    reschedule: (args: {
+      bookingId: string;
+      newSlot: string;
+      idempotencyKey: string;
+    }): ToolResult<{ booking: { id: string; slot: string; price: number; status: string } }> =>
       budgeted(
         "reschedule",
         { ...args },
-        () => refuse(),
-        () => false,
+        () =>
+          opts.authorizeWrite?.("reschedule", { ...args })
+            ? reschedule(db, toolOpts, userId, args)
+            : refuse(),
+        (d) => typeof d?.booking?.id === "string",
       ),
   };
 };
