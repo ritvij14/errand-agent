@@ -202,3 +202,101 @@ const rememberedFinal = (
   );
   return {};
 };
+// ——— cancel and reschedule (brief rows 7–8, U09) ———
+
+export const cancel = (
+  db: Db,
+  opts: WriteOpts,
+  userId: string,
+  args: { bookingId: string; idempotencyKey: string; testFaultAfterWrite?: boolean },
+): ToolResult<{ bookingId: string }> => {
+  const booking = db.prepare(`SELECT id, user_id FROM mock_booking WHERE id = ?`).get(args.bookingId) as
+    | { id: string; user_id: string }
+    | undefined;
+  if (!booking || booking.user_id !== userId) return { ok: false, error: "not_found", transient: false };
+
+  const remembered = db.prepare(`SELECT final_result FROM mock_idempotency WHERE key = ? AND tool = 'cancel'`).get(args.idempotencyKey) as
+    | { final_result: string }
+    | undefined;
+  if (remembered) return { ok: true, data: { bookingId: args.bookingId } }; // already cancelled for this key
+
+  const served = db.prepare(`SELECT cancel_503_served FROM mock_booking WHERE id = ?`).get(args.bookingId) as { cancel_503_served: number };
+  if (served.cancel_503_served === 0) {
+    db.prepare(`UPDATE mock_booking SET cancel_503_served = 1, updated_at = ? WHERE id = ?`).run(opts.clock.now().getTime(), args.bookingId);
+    return { ok: false, error: "glitch", transient: true }; // the designed first-call 503 (V-8)
+  }
+  db.transaction(() => {
+    db.prepare(`UPDATE mock_booking SET status = 'cancelled', updated_at = ? WHERE id = ?`).run(opts.clock.now().getTime(), args.bookingId);
+    if (args.testFaultAfterWrite) throw new Error("simulated crash after cancel write (R7 test)");
+    db.prepare(`INSERT INTO mock_idempotency (key, user_id, tool, final_result, booking_id, created_at) VALUES (?, ?, 'cancel', ?, ?, ?)`).run(
+      args.idempotencyKey,
+      userId,
+      JSON.stringify({ kind: "cancelled" }),
+      args.bookingId,
+      opts.clock.now().getTime(),
+    );
+  })();
+  return { ok: true, data: { bookingId: args.bookingId } };
+};
+
+export const reschedule = (
+  db: Db,
+  opts: WriteOpts,
+  userId: string,
+  args: { bookingId: string; newSlot: string; idempotencyKey: string; testFaultAfterWrite?: boolean },
+): ToolResult<{ booking: { id: string; slot: string; price: number; status: string } }> => {
+  const booking = db.prepare(`SELECT * FROM mock_booking WHERE id = ?`).get(args.bookingId) as
+    | (BookedRow & { user_id: string })
+    | undefined;
+  if (!booking || booking.user_id !== userId) return { ok: false, error: "not_found", transient: false };
+
+  const remembered = db.prepare(`SELECT final_result FROM mock_idempotency WHERE key = ? AND tool = 'reschedule'`).get(args.idempotencyKey) as
+    | { final_result: string }
+    | undefined;
+  if (remembered) {
+    const parsed = JSON.parse(remembered.final_result) as { kind: string };
+    if (parsed.kind === "rescheduled") return shape(booking);
+    return { ok: false, error: "slot_conflict", transient: false };
+  }
+
+  // free-slot check with the same seed math searches use (V-3); then the seeded
+  // slot_conflict probability (~10%) on top
+  const isFree = freeSlots(db, { seed: opts.seed, clock: opts.clock }, booking.provider_id, args.newSlot.slice(0, 10), args.newSlot.slice(0, 10)).includes(
+    args.newSlot,
+  );
+  const attempt = nextAttempt(db, "reschedule", args.idempotencyKey);
+  const conflict = !isFree || randomDraw({ seed: opts.seed, tool: "reschedule_conflict", inputs: [booking.provider_id, args.newSlot], attempt }) < opts.settings.slotConflictProb;
+  if (conflict) {
+    db.transaction(() => {
+      db.prepare(`INSERT INTO mock_idempotency (key, user_id, tool, final_result, booking_id, created_at) VALUES (?, ?, 'reschedule', ?, ?, ?)`).run(
+        args.idempotencyKey,
+        userId,
+        JSON.stringify({ kind: "slot_conflict" }),
+        args.bookingId,
+        opts.clock.now().getTime(),
+      );
+    })();
+    return { ok: false, error: "slot_conflict", transient: false };
+  }
+
+  db.transaction(() => {
+    db.prepare(`UPDATE mock_booking SET slot = ?, updated_at = ? WHERE id = ?`).run(args.newSlot, opts.clock.now().getTime(), args.bookingId);
+    if (args.testFaultAfterWrite) throw new Error("simulated crash after reschedule write (R7 test)");
+    db.prepare(`INSERT INTO mock_idempotency (key, user_id, tool, final_result, booking_id, created_at) VALUES (?, ?, 'reschedule', ?, ?, ?)`).run(
+      args.idempotencyKey,
+      userId,
+      JSON.stringify({ kind: "rescheduled" }),
+      args.bookingId,
+      opts.clock.now().getTime(),
+    );
+  })();
+  const fresh = db.prepare(`SELECT * FROM mock_booking WHERE id = ?`).get(args.bookingId) as BookedRow;
+  return shape(fresh);
+};
+
+type BookedRow = { id: string; user_id: string; provider_id: string; service: string; area: string; slot: string; price: number; status: string };
+
+const shape = (b: BookedRow): ToolResult<{ booking: { id: string; slot: string; price: number; status: string } }> => ({
+  ok: true,
+  data: { booking: { id: b.id, slot: b.slot, price: b.price, status: b.status } },
+});

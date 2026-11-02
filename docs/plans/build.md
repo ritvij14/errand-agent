@@ -133,7 +133,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U09 Write tools: cancel and reschedule
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 9 cancel/reschedule tests red→green (suite 62/62, both typechecks + lint). V-8 503-retry, replay-after-success, user isolation, price kept + old slot freed, seeded + non-free slot_conflict remembered per key, R7 fault-injection on both writes.
 - **Depends on.** U08.
 - **Covers.** Brief tool table rows 7–8, V-8, V-9 (provider side), R7.
 - **Build.** `cancel` fails with 503 on the first call per booking, then succeeds. The same key after success returns `cancelled`. Another user's booking returns `not_found`. `reschedule` keeps the price, frees the old slot, and returns `slot_conflict` on configured slots (about 10% by seed) and on slots that are not free. Each write is one transaction.
