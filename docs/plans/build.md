@@ -357,7 +357,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U28 Cancel flow
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `booking/cancel-gates.test.ts` (Gate 1 creates one in-flight cancel op and uses the approval; refuses a different booking; a second in-flight change to the same booking is refused by the database; Gate 2 only for this user's matching cancel op, never `book`), `agent/cancel.flow.test.ts` (card from the booking; approve → `list_bookings → cancel:glitch → cancel:ok` with the same key, booking cancelled; ambiguous → asks, answer picks; not found and past bookings → stays identifying; decline ends it with no call; changed in another conversation → approval voided `booking_changed`, no cancel call), client "Cancel …" card. Suite 237/237, client 20/20, evals 23/23 (15, 15b new; runner `conversation` step). QA `/tmp/verify-U28/drive.txt`: alice cancels seeded `mb-demo-ac` through `:5173/api` — trace `list_bookings → cancel:glitch → cancel (same key :1)`, booking `cancelled`, op `succeeded` (2 attempts), a second Approve → "Already cancelled".
 - **Depends on.** U27, U22.
 - **Covers.** FR-4, V-8, R3, R4, R9 (decline ends the cancel).
 - **Build.** `identifying_booking` with `BOOKING_NOT_FOUND` and `BOOKING_AMBIGUOUS`. An approval card with the booking's price. Re-check the booking with `list_bookings` before execute (R3). At most one in-flight operation per booking. The 503 retry uses the same key. If the outcome is unclear, check `list_bookings`.

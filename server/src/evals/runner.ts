@@ -18,6 +18,8 @@ export type EvalScenarioStep =
   | { step: "send_concurrently"; text: string }
   /** drop everything held in memory, start a fresh service on the same database, run startup recovery */
   | { step: "restart" }
+  /** switch to a named conversation of the same user (created on first use); the first one is "main" */
+  | { step: "conversation"; name: string }
   /** queue a forced outcome for the next call of a mock tool (NFR-4) */
   | { step: "force"; tool: string; outcome: string }
   /** tap a slot and press Confirm: sends that slot's pickText, as the page does (ADR-007) */
@@ -104,14 +106,15 @@ export const runScenario = async (
       mock: { seed: scenario.seed, forced, settings: { ...createMockSettings(), ...scenario.settings } },
     });
   let service = start();
-  const conversationId = service.createConversation(userId).id;
+  let conversationId = service.createConversation(userId).id;
+  const conversations = new Map<string, string>([["main", conversationId]]);
   let firstFailure: string | null = null;
   let lastReply: string | null = null;
   let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
   let lastRunId: string | null = null;
   /** the newest approval card shown — its buttons stay on screen after later replies */
-  let lastCardId: string | null = null;
+  const lastCards = new Map<string, string>(); // per conversation
   let pickedSearchPrice: number | null = null;
 
   const keep = (
@@ -130,7 +133,7 @@ export const runScenario = async (
     lastRunId = result.reply.runId;
     const card = result.reply.message.parts.find((p) => p.type === "approval_card") as
       { approvalId: string } | undefined;
-    if (card) lastCardId = card.approvalId;
+    if (card) lastCards.set(conversationId, card.approvalId);
   };
   /** a `send_concurrently` text waiting to go out while the next step's run is in progress */
   let concurrent: string | null = null;
@@ -174,6 +177,9 @@ export const runScenario = async (
       await send(step.step, step.text);
     } else if (step.step === "send_concurrently") {
       concurrent = step.text;
+    } else if (step.step === "conversation") {
+      if (!conversations.has(step.name)) conversations.set(step.name, service.createConversation(userId).id);
+      conversationId = conversations.get(step.name)!;
     } else if (step.step === "restart") {
       service = start();
       await service.recoverInFlight();
@@ -195,7 +201,7 @@ export const runScenario = async (
         lastOutcome = run.outcome;
         lastRunId = run.id;
         const card = lastParts.find((p) => p.type === "approval_card") as { approvalId: string } | undefined;
-        if (card) lastCardId = card.approvalId;
+        if (card) lastCards.set(conversationId, card.approvalId);
       }
     } else if (step.step === "force") {
       queued.push({ tool: step.tool, outcome: step.outcome });
@@ -292,7 +298,7 @@ export const runScenario = async (
           recordFailure(`expect ${step.agentBookings} agent booking(s) → got ${c}`);
       }
     } else if (step.step === "click") {
-      const cardId = lastCardId;
+      const cardId = lastCards.get(conversationId);
       if (!cardId) recordFailure(`click ${step.decision} → no approval card on screen`);
       else await act(`click ${step.decision}`, () => service.decideApproval(userId, cardId, step.decision));
     }

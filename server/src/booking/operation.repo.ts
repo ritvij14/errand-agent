@@ -33,12 +33,12 @@ export const operationRepo = (db: Db) => ({
       | "approval_id"
       | "idempotency_key"
       | "request"
-    >,
+    > & { booking_id?: string | null },
     now: number,
   ): OperationRecord => {
     db.prepare(
-      `INSERT INTO operation (id, kind, user_id, conversation_id, workflow_id, approval_id, idempotency_key, request, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)`,
+      `INSERT INTO operation (id, kind, user_id, conversation_id, workflow_id, approval_id, idempotency_key, request, booking_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)`,
     ).run(
       op.id,
       op.kind,
@@ -48,6 +48,7 @@ export const operationRepo = (db: Db) => ({
       op.approval_id,
       op.idempotency_key,
       op.request,
+      op.booking_id ?? null,
       now,
       now,
     );

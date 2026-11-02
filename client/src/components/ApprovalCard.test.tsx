@@ -26,6 +26,11 @@ describe("ApprovalCard", () => {
     expect(card.textContent).toContain("₹1,350");
   });
 
+  it("a cancel card says it cancels, not books", () => {
+    render(<ApprovalCard card={{ ...CARD, action: "cancel" }} onDecide={vi.fn()} disabled={false} />);
+    expect(screen.getByRole("group", { name: /approval/i }).textContent).toContain("Cancel Deva Pipe Care");
+  });
+
   it("Approve and Decline report the decision for this card", async () => {
     const user = userEvent.setup();
     const onDecide = vi.fn();

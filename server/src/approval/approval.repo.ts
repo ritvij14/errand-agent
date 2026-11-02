@@ -87,10 +87,14 @@ export const approvalRepo = (db: Db) => ({
       .run(reason, now, id).changes === 1,
 
   /**
-   * used → voided, only when its operation re-held and the slot or price changed before
-   * anything was booked (§ 2.5.6 hold_expired rows): the user must approve the new details.
+   * used → voided, only before anything happened: a re-hold found a new price or no slot
+   * (§ 2.5.6 hold_expired rows), or the booking to cancel changed since approval (R3).
    */
-  voidUsed: (id: string, reason: "price_changed" | "slot_changed", now: number): boolean =>
+  voidUsed: (
+    id: string,
+    reason: "price_changed" | "slot_changed" | "booking_changed",
+    now: number,
+  ): boolean =>
     db
       .prepare(
         `UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status = 'used'`,

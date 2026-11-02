@@ -1,6 +1,6 @@
 import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
-import type { ToolResult } from "../tools/index.js";
+import type { BookingRecord, ToolResult } from "../tools/index.js";
 import { operationRepo, type OperationRecord } from "./operation.repo.js";
 
 // Executing a book operation (§ 2.5.6 "Book — step by step"). MH-3: success is never
@@ -63,7 +63,7 @@ export const executeBook = (
     }
     // a timeout that left nothing behind is retried with the SAME key (the provider can't double-book it)
     if (status === "not_found" && !result.ok && result.transient && attempt < MAX_BOOK_ATTEMPTS) {
-      clock.advanceMs(tools.wait(tools.retryWaitsMs[attempt - 1] ?? tools.retryWaitsMs.at(-1) ?? 0));
+      waitBeforeRetry(clock, tools, attempt);
       continue;
     }
     const exhausted = status === "not_found" && !result.ok && result.transient; // every attempt used
@@ -71,4 +71,86 @@ export const executeBook = (
     repo.finish(op.id, "failed", { error, checkedStatus: status }, now());
     return { ok: false, kind: exhausted ? "retries_exhausted" : "not_booked", checkedStatus: status };
   }
+};
+
+/** NFR-2: 0.5 s, then 1 s, on the clock — through the run's budget, so a wait never passes the cap. */
+const waitBeforeRetry = (
+  clock: Clock,
+  tools: { retryWaitsMs: number[]; wait: (ms: number) => number },
+  attempt: number,
+): void => {
+  clock.advanceMs(tools.wait(tools.retryWaitsMs[attempt - 1] ?? tools.retryWaitsMs.at(-1) ?? 0));
+};
+
+export type CancelTools = {
+  cancel: (args: { bookingId: string; idempotencyKey: string }) => ToolResult<{ bookingId: string }>;
+  list: () => ToolResult<{ bookings: BookingRecord[] }>;
+  retryWaitsMs: number[];
+  wait: (ms: number) => number;
+};
+
+export type CancelOutcome =
+  | { ok: true }
+  /** `checkedStatus` is the booking's status from list_bookings (R5) */
+  | { ok: false; kind: "booking_changed" | "not_cancelled"; checkedStatus: string };
+
+/**
+ * Executing a cancel operation (§ 2.5.6 "Cancel and reschedule"). R3: before any call the
+ * booking is re-read with list_bookings — it must still be `booked` at the approved
+ * provider and slot. A transient failure (the designed first-call 503, V-8) is retried
+ * with the same key; an unclear outcome is settled by reading the booking again.
+ */
+export const executeCancel = (
+  db: Db,
+  clock: Clock,
+  tools: CancelTools,
+  op: OperationRecord,
+  approved: { providerId: string; slot: string },
+): CancelOutcome => {
+  const repo = operationRepo(db);
+  const now = () => clock.now().getTime();
+  const bookingId = op.booking_id!;
+  const current = () => {
+    const listed = tools.list();
+    return listed.ok ? listed.data.bookings.find((b) => b.id === bookingId) : undefined;
+  };
+
+  const before = current();
+  if (op.attempts > 0 && before?.status === "cancelled") {
+    // a cancel was already sent for this operation (restart recovery): it went through
+    repo.finish(op.id, "succeeded", { bookingId }, now());
+    return { ok: true };
+  }
+  if (
+    !before ||
+    before.status !== "booked" ||
+    before.providerId !== approved.providerId ||
+    before.slot !== approved.slot
+  ) {
+    const checkedStatus = before?.status ?? "not_found";
+    repo.finish(op.id, "failed", { error: "booking_changed", checkedStatus }, now());
+    return { ok: false, kind: "booking_changed", checkedStatus };
+  }
+
+  let error = "unknown";
+  for (let attempt = 1; attempt <= MAX_BOOK_ATTEMPTS; attempt += 1) {
+    repo.recordAttempt(op.id, now());
+    const result = tools.cancel({ bookingId, idempotencyKey: op.idempotency_key });
+    if (result.ok) {
+      repo.finish(op.id, "succeeded", { bookingId }, now());
+      return { ok: true };
+    }
+    error = result.error;
+    if (!result.transient || attempt === MAX_BOOK_ATTEMPTS) break;
+    waitBeforeRetry(clock, tools, attempt);
+  }
+  // outcome unclear: the booking itself says whether it happened
+  const after = current();
+  if (after?.status === "cancelled") {
+    repo.finish(op.id, "succeeded", { bookingId }, now());
+    return { ok: true };
+  }
+  const checkedStatus = after?.status ?? "unknown";
+  repo.finish(op.id, "failed", { error, checkedStatus }, now());
+  return { ok: false, kind: "not_cancelled", checkedStatus };
 };

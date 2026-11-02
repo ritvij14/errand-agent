@@ -46,3 +46,10 @@
 - **Answering** (`workflow.ts` `listMyBookings`): one `list_bookings` call through the run's gateway (`RunTools.list`, bound to the signed-in user), reply "You have N bookings — upcoming and past are below." / "You have no bookings yet.", and a `bookings_list` part `{ id, providerName, service, area, slot, slotLabel, price, status }` (`status` is `completed` for a past `booked` slot, from the mock). It's a side question: the request in progress (any phase) is left exactly where it was.
 - **I-10** (eval runner `checkIsolation`): no run's tool calls or agent reply contains a booking id that belongs to another user. Eval 23 runs as **bob** (scenario `user` field) asking for alice's bookings; a negative test proves the check fires. Cancel isolation at the tool layer (another user's booking → `not_found`) is tested in `tools/cancel-reschedule.test.ts`; the agent's cancel flow is U28.
 
+## Cancel: identifying the booking (U28, FR-4, R9)
+
+- **Reading:** any message with "cancel" (except "cancel that", a drop) → `{ kind: "cancel" }`.
+- **Starting:** a cancel opens its own workflow (`intent: cancel`, phase `identifying_booking`). If a request is already in progress the user is asked to drop it first (`TASK_IN_PROGRESS`; the ask-to-switch flow is U30).
+- **Identifying** (`identifyTarget`, pure match in `matchBookings`): the user's own `list_bookings`, upcoming (`booked`) only — a booking id in the text, else the service (`findService`), else a provider name, else all upcoming. One match → a cancel card (approval `action: cancel`, the booking's provider, slot, price and `booking_id`; the workflow keeps `target_booking_id`, and `candidates` holds the target as one provider block so the card and reply can name it). None → `BOOKING_NOT_FOUND`, several → `BOOKING_AMBIGUOUS`: stay in `identifying_booking`, list the upcoming bookings (`bookings_list`) and ask which; the next message is matched the same way.
+- **Decline ends it** (R9): workflow `abandoned`, "I kept your booking. Nothing was cancelled." An expired cancel card re-identifies the same booking for a fresh card.
+

@@ -13,7 +13,9 @@ export const ApprovalCard = ({ card, onDecide, disabled }: Props) => (
     aria-label="Booking approval"
     className="mt-2 rounded border border-neutral-300 bg-white p-2 text-sm"
   >
-    <p className="font-medium">Book {card.provider.name}</p>
+    <p className="font-medium">
+      {card.action === "cancel" ? "Cancel" : "Book"} {card.provider.name}
+    </p>
     <p>{card.slotLabel}</p>
     <p>{rupees(card.price)}</p>
     <div className="mt-2 flex gap-2">

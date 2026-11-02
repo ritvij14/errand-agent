@@ -16,6 +16,8 @@ export type ReadResult =
   | { kind: "unknown" }
   /** FR-5: "show my bookings" — whose bookings is never read from the text (V-7) */
   | { kind: "list_bookings" }
+  /** FR-4: "cancel my AC servicing" — which booking is matched against the user's own list */
+  | { kind: "cancel" }
   /** the model's read can't be used (only an eval can force this with the scripted model); read again */
   | { kind: "unusable" };
 
@@ -69,6 +71,7 @@ export const AREA_SYNONYMS: Record<string, string> = {
 };
 
 const DROP_RE = /never mind|forget it|stop|not that|don't need|cancel that/i;
+const CANCEL_RE = /\bcancel\b/i; // "cancel that" is a drop (DROP_RE is checked first)
 const LIST_BOOKINGS_RE = /\b(show|list|see|view|what are|what's)\b[^.?!]*\bbookings?\b|^\s*my bookings\b/i;
 // § 2.5.5 rule 2: only a *plain* yes approves — the whole message is the decision word
 const PLAIN_YES = /^\s*(yes|yeah|yep|sure|confirm|approve|go ahead|book it|fine|ok|okay)[\s.,!]*$/i;
@@ -119,6 +122,7 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
   if (PLAIN_NO.test(text)) return { kind: "decision", decision: "no" };
   const lead = DECISION_LEAD.exec(text);
   if (lead) return readDecisionWithChange(text.slice(lead[0].length), clock);
+  if (CANCEL_RE.test(text)) return { kind: "cancel" };
   if (LIST_BOOKINGS_RE.test(text)) return { kind: "list_bookings" };
 
   const pick = options ? readPick(text, options, clock) : undefined;

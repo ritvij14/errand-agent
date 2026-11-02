@@ -30,5 +30,7 @@
 
 - **Gate 1** (`booking/gates.ts` `startBookOperation`): only an `approved` approval equal to the request creates an operation, and that marks it `used`. A `used` approval can never authorize a new operation; the unique `approval_id` on operations backs this in the database.
 - **Gate 2** (`booking/gates.ts` `authorizeWrite`, injected into the tool gateway): a `book` call runs only for a persisted `in_flight` operation whose approval is `used` and whose request equals the call. An `approved`-but-unused approval can never authorize a tool call.
-- Repeated approvals report the existing operation (wording lands with U23); cancel / reschedule gates with U28 / U29.
+- Repeated approvals report the existing operation ("Already booked" / "Already cancelled"); reschedule gates with U29.
+- **Cancel (U28):** Gate 1 `startCancelOperation` — the approval's `booking_id` must equal the request; the operation carries `booking_id`, and the partial unique index allows **one in-flight operation per booking** (a second → "Another change to this booking is already in progress", `BOOKING_IN_FLIGHT`, rolled back). Gate 2 `authorizeWrite("cancel")` — this user's in-flight **cancel** operation with a used approval and the same `bookingId` (a cancel operation can never authorize `book`, and vice versa). Shared Gate 1 transaction: `startOperation` in `booking/gates.ts`.
+- **`used → voided` `booking_changed`** (R3): the booking to cancel was no longer `booked` at the approved provider + slot when re-read before the first call (eval 15b).
 - **`used → voided`** happens only in one place: a re-hold after `hold_expired` found a new price (`price_changed`) or no slot (`slot_changed`) before anything was booked (evals 6, 7). The user must approve the new details on a new card.

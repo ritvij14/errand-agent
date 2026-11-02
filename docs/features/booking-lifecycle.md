@@ -40,12 +40,19 @@
 - **Crash points for tests and evals** (forced `book` outcomes only): `server_crash_before_commit` throws before the provider does anything; `server_crash_after_commit` commits the booking + idempotency record, then throws — the R7 case.
 - A run that dies this way keeps no `ended_at` / outcome (it was cut off). Invariant I-5 only checks runs that ended.
 
+## Cancel (U28, FR-4, V-8, R3)
+
+- `executeCancel` (`booking/execute.ts`): **R3 re-check first** — `list_bookings` must still show the booking `booked` at the approved provider and slot; otherwise the operation fails `booking_changed` and the workflow voids the approval, with no cancel call. Then `cancel` with the key; a transient failure (the mock's designed first-call 503, `error: "glitch"`, V-8) waits (`budget.wait`) and retries with the **same key**, up to 3 attempts. An unclear end (non-transient error or attempts used) is settled by reading the booking: `cancelled` → `succeeded`, else `failed` with the checked status (R5). A restart after a cancel call was sent (`attempts > 0`) and the booking reads `cancelled` → `succeeded`.
+- **Decision:** the design names two moments for the R3 re-check (Gate 1 and Gate 2). They fall in the same run moments apart, so it runs **once, right before the first `cancel` call** — the later of the two — rather than costing two `list_bookings` calls.
+- Workflow: "Cancelled: {provider} on {slot}. Booking id: X." only when it happened; `booking_changed` → "That booking changed since you approved…", `failed`; not confirmed → "Nothing was cancelled — … still {status}".
+- **Restart / unknown error:** a cancel operation in flight is re-run by `recover` while its approval is under 10 minutes old; older → `settleCancelByList` (read the booking: cancelled → report it, else failed, ask again). `afterUnknownError` words cancels from the same read.
+
 ## Evals
 
-- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking; 20a/b/c restart mid-booking (booked → reported; `not_found` + hold valid → resumed, same key; `not_found` + hold expired → asks again, nothing booked) using the runner's `restart` step (fresh service on the same database + startup recovery).
+- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking; 15 cancel: 503 → same key → cancelled once (trace `list_bookings → cancel:glitch → cancel:ok`); 15b another conversation cancelled it first → the old approval voided, only `list_bookings` called; 20a/b/c restart mid-booking (booked → reported; `not_found` + hold valid → resumed, same key; `not_found` + hold expired → asks again, nothing booked) using the runner's `restart` step (fresh service on the same database + startup recovery).
 - Every scenario that approves a booking forces its `book` outcome: keys contain the random operation id, so an unforced `book` draws a different result each run (B4). `runner.test.ts` guards this.
 
 ## Not yet
 
-- Recovery for cancel / reschedule (U28 / U29).
+- Recovery for reschedule (U29).
 - A cap hit mid-booking (U25, evals 21b, 21c) leaves the operation `in_flight` on purpose; the next run's recovery resolves it.

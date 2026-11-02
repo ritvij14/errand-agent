@@ -413,4 +413,42 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       },
     ],
   },
+  // ——— cancel (FR-4, V-8, R3, U28) ———
+  "15": {
+    id: "15",
+    name: "Cancel: first call 503 → retry same key → cancelled once",
+    description:
+      "V-8: the first cancel per booking always gets a 503; the retry reuses the idempotency key. R3: the booking is re-read before any call.",
+    seed: "eval-seed",
+    user: "alice",
+    steps: [
+      { step: "say", text: "cancel my AC servicing" },
+      { step: "expect", phase: "awaiting_approval", cardMatchesApproval: true },
+      { step: "click", decision: "approve" },
+      {
+        step: "expect",
+        phase: "done",
+        replyContains: "Cancelled:",
+        lastRunToolCalls: ["list_bookings:ok", "cancel:glitch", "cancel:ok"],
+      },
+    ],
+  },
+  "15b": {
+    id: "15b",
+    name: "Cancel: the booking changed in another conversation → the old approval is voided, nothing sent (R3)",
+    description:
+      "R3: two conversations each get a cancel card for the same booking; after one cancels, the other's approval finds the booking changed and makes no cancel call.",
+    seed: "eval-seed",
+    user: "alice",
+    steps: [
+      { step: "say", text: "cancel my AC servicing" },
+      { step: "conversation", name: "second" },
+      { step: "say", text: "cancel my AC servicing" },
+      { step: "click", decision: "approve" },
+      { step: "expect", phase: "done", replyContains: "Cancelled:" },
+      { step: "conversation", name: "main" },
+      { step: "click", decision: "approve" },
+      { step: "expect", phase: "failed", replyContains: "changed", lastRunToolCalls: ["list_bookings:ok"] },
+    ],
+  },
 };
