@@ -311,4 +311,88 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       },
     ],
   },
+  // ——— limit exhaustion (R10, § 2.5.3, U25): four deterministic cases ———
+  "21a": {
+    id: "21a",
+    name: "Limit: a model that never gives a usable read stops at 6 model calls",
+    description:
+      "NFR-1: an unusable read is read again; the cap of 6 model calls ends the loop with cap_model_calls and a clear reply.",
+    seed: "eval-seed",
+    steps: [
+      ...Array.from({ length: 8 }, () => ({
+        step: "force" as const,
+        tool: "model_read",
+        outcome: "unusable",
+      })),
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "expect", outcome: "cap_model_calls", replyContains: "6 model calls", agentBookings: 0 },
+    ],
+  },
+  "21b": {
+    id: "21b",
+    name: "Limit: a booking that needs an 11th tool call stops with cap_tool_calls; the next run resolves it",
+    description:
+      "NFR-1: two hold expiries and three timeouts need more than 10 provider calls; the run stops mid-check and the next message finishes the booking.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "hold_expired" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "hold_expired" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "click", decision: "approve" },
+      {
+        step: "expect",
+        outcome: "cap_tool_calls",
+        replyContains: "booking check didn't finish",
+        agentBookings: 0,
+      },
+      { step: "force", tool: "book", outcome: "ok" },
+      { step: "say", text: "hello" },
+      { step: "expect", phase: "done", agentBookings: 1 },
+    ],
+  },
+  "21c": {
+    id: "21c",
+    name: "Limit: long provider timeouts stop the run at 60 s with cap_time; the next run resolves it",
+    description: "NFR-1, R8: simulated pauses count toward the time cap and are cut short at the deadline.",
+    seed: "eval-seed",
+    settings: { timeoutPauseMs: 25_000 },
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "click", decision: "approve" },
+      { step: "expect", outcome: "cap_time", replyContains: "booking check didn't finish", agentBookings: 0 },
+      { step: "force", tool: "book", outcome: "ok" },
+      { step: "say", text: "hello" },
+      { step: "expect", phase: "done", agentBookings: 1 },
+    ],
+  },
+  "21d": {
+    id: "21d",
+    name: "Limit: three timeout retries exhausted → retries_exhausted, nothing booked",
+    description:
+      "NFR-2: a retry count, not a cap — the reply is worded from the checked status and names the next step.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "force", tool: "book", outcome: "timeout" },
+      { step: "click", decision: "approve" },
+      {
+        step: "expect",
+        outcome: "retries_exhausted",
+        phase: "failed",
+        replyContains: "Nothing was booked",
+        agentBookings: 0,
+      },
+    ],
+  },
 };

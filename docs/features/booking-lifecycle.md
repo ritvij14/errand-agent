@@ -10,7 +10,7 @@
   - `authorizeWrite(db, userId)` — **Gate 2**, injected into the tool gateway (`CreateGatewayOpts.authorizeWrite`), so `tools` never imports `booking`. `book` runs only when the key belongs to this user's `in_flight` book operation, its approval is `used`, and the hold id equals the operation's request. No authorizer → every write is refused (`UNAUTHORIZED_WRITE`). Cancel / reschedule are always refused until their units.
   - `executeBook(db, clock, tools, op, beforeVerify)` — the § 2.5.6 decision table. Every `book` result except `slot_taken` / `hold_expired` is checked with `get_booking_status(key)` before anything is decided (the first check moves the workflow to `verifying`):
     - `booked` (same booking id when `book` returned one) → `succeeded` `{ bookingId }` — this covers timeout-after-success.
-    - `not_found` after a timeout → wait on the clock (`retryWaitsMs`: 0.5 s, then 1 s) and call `book` again with the **same key**, up to `MAX_BOOK_ATTEMPTS` = 3 (NFR-2). The check after the third attempt is the "one last" status check; still not booked → `failed` `{ error, checkedStatus }`.
+    - `not_found` after a timeout → wait on the clock (`retryWaitsMs`: 0.5 s, then 1 s, through the run's `budget.wait`) and call `book` again with the **same key**, up to `MAX_BOOK_ATTEMPTS` = 3 (NFR-2). The check after the third attempt is the "one last" status check; still not booked → `failed` `{ error: "retries_exhausted", checkedStatus }`, kind `retries_exhausted` → the run ends `retries_exhausted` (U25, eval 21d).
     - `slot_taken` → `failed` (`kind: "slot_taken"`).
     - `hold_expired` → returned with the operation still `in_flight`, so the workflow can re-hold.
   - `operationRepo.nextKey(id, holdId, previousOutcome)` — the key change (R7): one UPDATE sets `hold_seq + 1`, key `<op id>:<n>`, the new request, attempts 0, and records the previous key's terminal outcome in `result`.
@@ -47,4 +47,5 @@
 
 ## Not yet
 
-- Recovery for cancel / reschedule (U28 / U29). Caps on the recovery run (U25).
+- Recovery for cancel / reschedule (U28 / U29).
+- A cap hit mid-booking (U25, evals 21b, 21c) leaves the operation `in_flight` on purpose; the next run's recovery resolves it.

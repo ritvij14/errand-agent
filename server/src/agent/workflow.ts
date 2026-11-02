@@ -76,7 +76,7 @@ export type HoldTool = (
 ) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
 
 /** What the run applying a message lends the store: its trace (MH-7) and its tools. */
-export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool; book?: BookTools };
+export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool; book?: BookTools; model?: AgentModel };
 
 const REQUIRED = ["service", "area", "time_window"] as const;
 
@@ -150,6 +150,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   let search: SearchTool | undefined;
   let hold: HoldTool | undefined;
   let bookTools: BookTools | undefined;
+  /** the run's counted model (caps, NFR-1); the store's own model outside a run */
+  let runModel: AgentModel | undefined;
   const approvals = approvalRepo(db);
   const operations = operationRepo(db);
   const nowMs = () => clock.now().getTime();
@@ -271,6 +273,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       search = run?.search;
       hold = run?.hold;
       bookTools = run?.book;
+      runModel = run?.model;
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
@@ -283,12 +286,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const active = getActive(conversationId);
       const shown =
         active?.phase === "choosing" ? ((active.candidates as OptionBlock[] | null) ?? undefined) : undefined;
-      const read: ReadResult = await model.read({
-        text,
-        waitingFor: active?.phase ?? "nothing",
-        clock,
-        options: shown,
-      });
+      const readJob = { text, waitingFor: active?.phase ?? "nothing", clock, options: shown };
+      let read: ReadResult = await (runModel ?? model).read(readJob);
+      // an unusable read is read again; the model-call cap stops a model that never gives one
+      while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
 
       if (read.kind === "pick" || read.kind === "pick_unclear") {
         if (!active || !shown?.length) {
@@ -463,6 +464,32 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (!w || (w.phase !== "executing" && w.phase !== "verifying")) return undefined;
       const op = operations.inFlightFor(w.id);
       return op ? recoverOperation(w, op) : undefined;
+    },
+
+    /**
+     * R5 / § 2.5.3 `unknown_error`: the reply is worded from the operation's checked status,
+     * never a hopeful default. Absent → nothing was booked (the operation is closed, so it
+     * can't be booked later behind the user's back); found → reported; unreadable → left
+     * in flight for recovery to check again.
+     */
+    afterUnknownError: (conversationId: string): string => {
+      const w = getActive(conversationId);
+      const op = w ? operations.inFlightFor(w.id) : undefined;
+      if (!w || !op) return "Something went wrong on our side, so I stopped. Nothing was booked or changed — please send that again.";
+      let checked: ReturnType<BookTools["status"]> | undefined;
+      try {
+        checked = bookTools?.status(op.idempotency_key);
+      } catch {
+        checked = undefined; // unreadable — including a cap hit on the check itself
+      }
+      if (checked?.ok && checked.data.status === "booked" && checked.data.bookingId) return finishFoundBooking(w, op, checked.data.bookingId).reply;
+      if (checked?.ok && (checked.data.status === "not_found" || checked.data.status === "failed")) {
+        operations.finish(op.id, "failed", { error: "unknown_error", checkedStatus: checked.data.status }, nowMs());
+        trace?.record("operation_event", { event: "failed", kind: "book", key: op.idempotency_key, result: checked.data.status });
+        saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "failed" }));
+        return "Something went wrong on our side. Nothing was booked — ask me to try again.";
+      }
+      return "Something went wrong on our side. I couldn't confirm whether it went through — don't book again yet. Message me in a moment and I'll check again.";
     },
 
     /** The Approve / Decline buttons (§ 2.5.5): the same rules as a typed answer. */
@@ -856,11 +883,14 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     }));
     const facts = (finished.workflow ?? current).facts;
     if (!outcome.ok) {
+      const exhausted = outcome.kind === "retries_exhausted";
       return {
         phase: "failed",
-        reply: `Nothing was booked — I checked with the provider and there is no booking for this request (status: ${outcome.checkedStatus}). Ask me to try again.`,
+        reply: exhausted
+          ? `Nothing was booked — the provider timed out ${MAX_BOOK_ATTEMPTS} times, and when I checked there was no booking (status: ${outcome.checkedStatus}). Ask me to try again.`
+          : `Nothing was booked — I checked with the provider and there is no booking for this request (status: ${outcome.checkedStatus}). Ask me to try again.`,
         facts,
-        code: "BOOKING_FAILED",
+        code: exhausted ? "retries_exhausted" : "BOOKING_FAILED",
       };
     }
     const selection = w.selection!;
@@ -868,6 +898,19 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       phase: "done",
       reply: `Booked: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${outcome.bookingId}.`,
       facts,
+    };
+  }
+
+  /** The provider has the booking though the run never finished it: record it and report it. */
+  function finishFoundBooking(w: WorkflowRow, op: OperationRecord, bookingId: string): ApplyOutcome {
+    const selection = w.selection!;
+    operations.finish(op.id, "succeeded", { bookingId, recovered: true }, nowMs());
+    trace?.record("operation_event", { event: "succeeded", kind: "book", key: op.idempotency_key, result: bookingId });
+    const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "done" }));
+    return {
+      phase: "done",
+      reply: `Your booking went through: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${bookingId}.`,
+      facts: (finished.workflow ?? w).facts,
     };
   }
 
@@ -879,22 +922,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   function recoverOperation(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
     const checked = bookTools!.status(op.idempotency_key);
     const status = checked.ok ? checked.data.status : checked.error;
-    const selection = w.selection!;
-    if (checked.ok && status === "booked" && checked.data.bookingId) {
-      operations.finish(op.id, "succeeded", { bookingId: checked.data.bookingId, recovered: true }, nowMs());
-      trace?.record("operation_event", {
-        event: "succeeded",
-        kind: "book",
-        key: op.idempotency_key,
-        result: checked.data.bookingId,
-      });
-      const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "done" }));
-      return {
-        phase: "done",
-        reply: `Your booking went through: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${checked.data.bookingId}.`,
-        facts: (finished.workflow ?? w).facts,
-      };
-    }
+    if (checked.ok && status === "booked" && checked.data.bookingId) return finishFoundBooking(w, op, checked.data.bookingId);
     if (status === "not_found" && (w.hold?.expiresAt ?? 0) > nowMs()) return executeOperation(w);
     const holdRanOut = status === "not_found";
     operations.finish(

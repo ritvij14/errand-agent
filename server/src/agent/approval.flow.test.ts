@@ -23,7 +23,14 @@ const setup = async () => {
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
   seedDemoUsers(testDb.db, clock.now().getTime());
   seedMockWorld(testDb.db, { seed: "errand-agent-v1", clock });
-  const service = createConversationService({ db: testDb.db, clock, model: scriptedModel });
+  // every `book` succeeds: these tests are about the decision, and an unforced book draws
+  // from a random key (B4) — slot_taken would send the workflow back to choosing
+  const service = createConversationService({
+    db: testDb.db,
+    clock,
+    model: scriptedModel,
+    mock: { forced: { take: (tool) => (tool === "book" ? { outcome: "ok" } : undefined) } },
+  });
   const conversationId = service.createConversation(ALICE).id;
   const say = async (text: string, approvalId?: string): Promise<Reply> => {
     const result = await service.sendMessage(ALICE, conversationId, text, randomUUID(), approvalId);

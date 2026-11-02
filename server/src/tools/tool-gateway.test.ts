@@ -7,6 +7,7 @@ import { createMockSettings, DEFAULT_SEED } from "./settings.js";
 import { createToolGateway, type CreateGatewayOpts } from "./tool-gateway.js";
 import { readTrace } from "../tracing/index.js";
 import { startTrace, type Trace } from "../tracing/tracing.js";
+import { createRunBudget } from "../shared/run-budget.js";
 
 function gw(o?: { trace?: Trace; toolCalls?: number; broken?: CreateGatewayOpts["broken"] }) {
   const testDb = createTestDb();
@@ -21,7 +22,7 @@ function gw(o?: { trace?: Trace; toolCalls?: number; broken?: CreateGatewayOpts[
     seed: DEFAULT_SEED,
     userId: "u-demo-alice",
     trace: o?.trace ?? startTrace(testDb.db, clock, "run-gw"),
-    toolsUsed: o?.toolCalls ?? 0,
+    budget: createRunBudget({ toolCalls: o?.toolCalls ?? 0 }),
     broken: o?.broken,
   };
   return { testDb, clock, gateway: createToolGateway(deps), deps };
@@ -62,10 +63,9 @@ describe("caps and tracing", () => {
     testDb.close();
   });
 
-  it("a call over the tool budget is not made", () => {
+  it("a call over the tool budget is not made: the run is stopped with cap_tool_calls", () => {
     const { testDb, gateway } = gw({ toolCalls: 10 });
-    const result = gateway.listBookings();
-    expect(result).toMatchObject({ ok: false, error: "CAP_TOOL_CALLS", transient: false });
+    expect(() => gateway.listBookings()).toThrow(expect.objectContaining({ cap: "cap_tool_calls" }));
     const events = readTrace(testDb.db, "run-gw").filter((e) => e.type === "tool_call");
     expect(events).toHaveLength(0); // refused before the call, so no trace of a call being made
     testDb.close();

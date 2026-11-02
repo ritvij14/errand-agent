@@ -13,12 +13,14 @@ export type BookTools = {
   status: (idempotencyKey: string) => ToolResult<{ status: string; bookingId?: string }>;
   /** waits between retries of the same key, on the clock: 0.5 s, then 1 s (NFR-2) */
   retryWaitsMs: number[];
+  /** the run's budget for a wait: returns the ms actually waited (R8) */
+  wait: (ms: number) => number;
 };
 
 export type BookOutcome =
   | { ok: true; bookingId: string }
   /** the operation is finished as failed; `checkedStatus` is what the provider says now (R5) */
-  | { ok: false; kind: "slot_taken" | "not_booked"; checkedStatus: string }
+  | { ok: false; kind: "slot_taken" | "not_booked" | "retries_exhausted"; checkedStatus: string }
   /** the hold ran out: the operation stays in flight so the caller can re-hold (V-4) */
   | { ok: false; kind: "hold_expired" };
 
@@ -61,15 +63,12 @@ export const executeBook = (
     }
     // a timeout that left nothing behind is retried with the SAME key (the provider can't double-book it)
     if (status === "not_found" && !result.ok && result.transient && attempt < MAX_BOOK_ATTEMPTS) {
-      clock.advanceMs(tools.retryWaitsMs[attempt - 1] ?? tools.retryWaitsMs.at(-1) ?? 0);
+      clock.advanceMs(tools.wait(tools.retryWaitsMs[attempt - 1] ?? tools.retryWaitsMs.at(-1) ?? 0));
       continue;
     }
-    repo.finish(
-      op.id,
-      "failed",
-      { error: result.ok ? "unverified" : result.error, checkedStatus: status },
-      now(),
-    );
-    return { ok: false, kind: "not_booked", checkedStatus: status };
+    const exhausted = status === "not_found" && !result.ok && result.transient; // every attempt used
+    const error = exhausted ? "retries_exhausted" : result.ok ? "unverified" : result.error;
+    repo.finish(op.id, "failed", { error, checkedStatus: status }, now());
+    return { ok: false, kind: exhausted ? "retries_exhausted" : "not_booked", checkedStatus: status };
   }
 };

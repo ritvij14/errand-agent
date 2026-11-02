@@ -37,6 +37,7 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 - **Fix.** `server/src/evals/scenarios.ts`: evals 13 and 14 queue `book → ok`; every booking scenario now forces its outcome.
 - **Regression test (red → green).** `evals/runner.test.ts` "every scenario that approves a booking queues its book outcome…" (red: `['13','14']`). Evals then passed 5 runs in a row.
 - **Commit.** U23.
+- **Same cause, found again in U25.** `approval.flow.test.ts` "the Approve button approves the card's record…" failed once in a full run: its approve hit a random `slot_taken`, which (since U22) sends the workflow back to `choosing`. Its setup now forces every `book` to `ok` — that file is about the decision, not the booking result. Three full runs green after.
 
 ## Invariants found broken by tests
 

@@ -320,7 +320,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U25 Caps and truthful endings
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `shared/run-budget.test.ts` (6/10 caps refuse before the call; simulated waits count and are cut at the time left; real elapsed counts; a slow promise is stopped at the deadline, R8), `agent/caps.flow.test.ts` (unusable reads → `cap_model_calls` at 6; one unusable read costs one more call; a 400 ms model with a 50 ms cap ends `cap_time` in < 300 ms; 11th tool call → `cap_tool_calls`, operation left in flight, next message books it; 25 s pauses → `cap_time`; V-5 longest normal path fits; `retries_exhausted`; `unknown_error` worded for absent / booked / unreadable, details only in the trace). User decision: 21a reached by a bounded re-read of an `unusable` read. Suite 219/219, evals 20/20 (21a–d new), 3 full runs green. QA: `/tmp/verify-U25/eval21b-trace.txt` — eval 21b on a file DB read back with sqlite: 10 tool calls → `limit_hit cap_tool_calls` (elapsedMs 31508 = simulated pauses), reply names the limit, the next message booked it on key `:3`; `/tmp/verify-U25/drive.txt` dev-server booking still `completed` with 2/1, 2/1, 1/2 model/tool calls. No dev-server capped run yet — the app has no force knob until U37.
 - **Depends on.** U23, U24.
 - **Covers.** MH-5, NFR-1, FR-14, § 2.5.3 caps and endings, V-5, R5, R8, R10.
 - **Build.** Caps checked before every model call, tool call and wait: 6 / 10 / 60 s. The deadline uses the elapsed timer, and awaited work is raced against the time left (R8). Every ending is recorded with its reply. Wording comes from the operation's checked status (R5). `unknown_error` keeps details in the trace only. `limit_hit` trace events.

@@ -13,7 +13,9 @@ export type ReadResult =
   | { kind: "decision"; decision: "yes" | "no" }
   | { kind: "pick"; providerId: string; slot: string }
   | { kind: "pick_unclear" }
-  | { kind: "unknown" };
+  | { kind: "unknown" }
+  /** the model's read can't be used (only an eval can force this with the scripted model); read again */
+  | { kind: "unusable" };
 
 const VAGUE_PICK_RE = /\b(first|second|third|fourth|fifth|last|that|this|other) one\b/i;
 

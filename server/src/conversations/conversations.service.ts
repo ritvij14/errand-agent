@@ -4,11 +4,13 @@ import { startTrace, readTrace } from "../tracing/index.js";
 import { approvalRepo } from "../approval/index.js";
 import { authorizeWrite, operationRepo } from "../booking/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
-import type { AgentModel } from "../agent/index.js";
+import type { AgentModel, ReadResult } from "../agent/index.js";
+import { CAPS, CapHit, createRunBudget, type CapCode, type Caps } from "../shared/run-budget.js";
 import {
   createMockSettings,
   createToolGateway,
   DEFAULT_SEED,
+  SimulatedCrash,
   type ForcedQueue,
   type MockSettings,
 } from "../tools/index.js";
@@ -23,7 +25,13 @@ export type ConversationsDeps = {
   clock: Clock;
   model: AgentModel;
   mock?: { seed?: string; settings?: MockSettings; forced?: ForcedQueue };
+  /** the run caps (NFR-1); tests shrink them */
+  caps?: Caps;
 };
+
+/** A workflow code that ends the run some other way than `completed` (§ 2.5.3). */
+const runOutcomeOf = (code: string | undefined): string =>
+  code === "unknown_error" ? "error" : code === "retries_exhausted" ? "retries_exhausted" : "completed";
 
 export type ReplyPart = Record<string, unknown>;
 export type Reply = {
@@ -52,6 +60,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
   const approvals = approvalRepo(db);
   const mockSettings = deps.mock?.settings ?? createMockSettings();
   const forced: ForcedQueue = deps.mock?.forced ?? { take: () => undefined };
+  const caps = deps.caps ?? CAPS;
 
   /**
    * One run (§ 2.5.3): busy check, run + trace, a tool gateway bound to the user and
@@ -81,7 +90,23 @@ export const createConversationService = (deps: ConversationsDeps) => {
       userId,
       phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none",
     });
+    const budget = createRunBudget({ caps });
+    // every model call goes through the run's caps and is raced against the time left (R8)
+    const countedModel: AgentModel = {
+      read: async (job) => {
+        budget.beforeModelCall();
+        const result: ReadResult =
+          forced.take("model_read", 0)?.outcome === "unusable" ? { kind: "unusable" } : await budget.race(model.read(job));
+        trace.record("model_call", { job: "read", input: job.text, output: result.kind });
+        return result;
+      },
+      write: async (job) => {
+        budget.beforeModelCall();
+        return budget.race(model.write(job));
+      },
+    };
     try {
+      let ending: { outcome: string; text: string; parts: ReplyPart[] };
       const gateway = createToolGateway({
         db,
         clock,
@@ -90,66 +115,71 @@ export const createConversationService = (deps: ConversationsDeps) => {
         seed: deps.mock?.seed ?? DEFAULT_SEED,
         userId,
         trace,
+        budget,
         authorizeWrite: authorizeWrite(db, userId), // Gate 2 (R1)
       });
       workflowStore.useRun({
         trace,
+        model: countedModel,
         search: gateway.searchProviders,
         hold: gateway.holdSlot,
         book: {
           book: gateway.book,
           status: gateway.getBookingStatus,
           retryWaitsMs: mockSettings.retryWaitsMs,
+          wait: budget.wait,
         },
       });
-      // § 2.5.2 rule 5: a booking cut off by a restart is finished before the new input is read
-      const recovered = trigger === "recovery" ? undefined : workflowStore.recover(conversationId);
-      if (recovered?.reply)
-        repo.addMessage(
-          conversationId,
-          run.id,
-          "agent",
-          recovered.reply,
-          (recovered.parts ?? []) as ReplyPart[],
-          clock.now().getTime(),
-        );
-      if (userMessage)
-        repo.addMessage(
-          conversationId,
-          run.id,
-          "user",
-          userMessage.text,
-          [],
-          clock.now().getTime(),
-          userMessage.clientMessageId,
-        );
-      const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
-      const toolCalls = gateway.toolCallsUsed();
-      const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
-      if (userMessage)
-        trace.record("model_call", {
-          job: "read",
-          input: userMessage.text,
-          output: outcome.code ?? "applied",
-        });
-      trace.record("model_call", { job: "write", output: replyText });
-      const modelCalls = userMessage ? 2 : 1;
+      try {
+        // § 2.5.2 rule 5: a booking cut off by a restart is finished before the new input is read
+        const recovered = trigger === "recovery" ? undefined : workflowStore.recover(conversationId);
+        if (recovered?.reply)
+          repo.addMessage(conversationId, run.id, "agent", recovered.reply, (recovered.parts ?? []) as ReplyPart[], clock.now().getTime());
+        if (userMessage)
+          repo.addMessage(conversationId, run.id, "user", userMessage.text, [], clock.now().getTime(), userMessage.clientMessageId);
+        const outcome = await step(userMessage?.text ?? "");
+        // the write job: when the code already decided the wording it still counts as the run's write
+        if (outcome.reply) budget.beforeModelCall();
+        const text = outcome.reply || (await countedModel.write({ purpose: outcome.code ?? "help", state: {} }));
+        trace.record("model_call", { job: "write", output: text });
+        ending = { outcome: runOutcomeOf(outcome.code), text, parts: (outcome.parts ?? []) as ReplyPart[] };
+      } catch (error) {
+        if (error instanceof SimulatedCrash) throw error; // the process is gone: nothing more runs
+        if (error instanceof CapHit) {
+          trace.record("limit_hit", { cap: error.cap, ...budget.used() });
+          ending = { outcome: error.cap, text: capReply(error.cap, conversationId), parts: [] };
+        } else {
+          // details stay in the trace; the reply comes from the operation's checked status (R5)
+          const internalDetails = (error instanceof Error ? (error.stack ?? error.message) : String(error)).slice(0, 2000);
+          trace.record("error", { code: "unknown_error", internalDetails });
+          ending = { outcome: "unknown_error", text: workflowStore.afterUnknownError(conversationId), parts: [] };
+        }
+      } finally {
+        workflowStore.useRun(undefined);
+      }
+      const used = budget.used();
       const endedAt = clock.now().getTime();
-      const runOutcome = outcome.code === "unknown_error" ? "error" : "completed"; // conversation-level errors complete the run (§2.5.3)
-      repo.finishRun(run.id, runOutcome, endedAt, modelCalls, toolCalls);
-      trace.record("run_ended", { outcome: runOutcome, modelCalls, toolCalls });
-      const saved = repo.addMessage(
-        conversationId,
-        run.id,
-        "agent",
-        replyText,
-        (outcome.parts ?? []) as ReplyPart[],
-        endedAt,
-      );
-      return { ok: true, reply: toReply(run, saved) };
+      repo.finishRun(run.id, ending.outcome, endedAt, used.modelCalls, used.toolCalls);
+      trace.record("run_ended", { outcome: ending.outcome, modelCalls: used.modelCalls, toolCalls: used.toolCalls, durationMs: used.elapsedMs });
+      const saved = repo.addMessage(conversationId, run.id, "agent", ending.text, ending.parts, endedAt);
+      return { ok: true, reply: toReply({ ...run, outcome: ending.outcome }, saved) };
     } finally {
       busyMarkers.delete(conversationId);
     }
+  };
+
+  /** Which limit was hit and what that leaves (§ 2.5.3): never a promised follow-up we don't run. */
+  const capReply = (cap: CapCode, conversationId: string): string => {
+    const limit = {
+      cap_model_calls: `this message hit my limit of ${caps.modelCalls} model calls`,
+      cap_tool_calls: `this request hit my limit of ${caps.toolCalls} provider calls`,
+      cap_time: `this request hit my time limit of ${caps.elapsedMs / 1000} seconds`,
+    }[cap];
+    const phase = workflowStore.getActiveWorkflow(conversationId)?.phase;
+    const midBooking = phase === "executing" || phase === "verifying";
+    return midBooking
+      ? `I stopped: ${limit}. Your booking check didn't finish — message me anything and I'll check and tell you right away.`
+      : `I stopped: ${limit}. Nothing was booked or changed — send your message again to continue.`;
   };
 
   const toReply = (run: Run, message: { id: string; text: string; parts: unknown[] }): Reply => ({

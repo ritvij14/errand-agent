@@ -13,13 +13,12 @@ import {
 } from "./read-tools.js";
 
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
+import { createRunBudget, type RunBudget } from "../shared/run-budget.js";
 
 // The tool gateway (§ 2.5.4): the agent's ONLY way to the provider API. Bound to one
 // signed-in user and one run (trace + tool budget). Write tools are fail-closed: they
 // run only when `authorizeWrite` (Gate 2, owned by booking operations) says the call
 // matches a persisted in-flight operation (R1, MH-2). No authorizer → every write refused.
-
-export const TOOL_CALL_CAP = 10;
 
 const SUSPECT_PATTERNS = [
   /ignore (all|previous|prior) instructions/i,
@@ -49,7 +48,8 @@ export type CreateGatewayOpts = {
   seed?: string;
   userId: string;
   trace?: Trace;
-  toolsUsed?: number;
+  /** the run's caps (NFR-1); a gateway on its own gets a fresh budget */
+  budget?: RunBudget;
   /** Gate 2 (§ 2.5.5): may this exact write call run? */
   authorizeWrite?: (tool: string, args: Record<string, unknown>) => boolean;
   broken?: {
@@ -71,13 +71,14 @@ export type ProviderDetails = {
 export const createToolGateway = (opts: CreateGatewayOpts) => {
   const { db, clock, settings, forced, userId } = opts;
   const trace = opts.trace ?? startTrace(db, clock, `gateway-${userId}`);
-  let used = opts.toolsUsed ?? 0;
+  const budget = opts.budget ?? createRunBudget();
 
   const toolOpts: WriteOpts = {
     seed: opts.seed ?? DEFAULT_SEED,
     clock,
     settings,
     forced: { take: (tool, nth) => forced.take(tool, nth) },
+    wait: (ms) => budget.wait(ms),
   };
 
   const budgeted = <T>(
@@ -86,10 +87,7 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
     call: () => ToolResult<T>,
     shape: (data: T) => boolean,
   ): ToolResult<T> => {
-    if (used >= TOOL_CALL_CAP) {
-      return { ok: false, error: "CAP_TOOL_CALLS", transient: false }; // refused before the call
-    }
-    used += 1;
+    budget.beforeToolCall(); // a cap stops the run before the call is made (CapHit)
     const raw = call();
     if (raw.ok && !shape(raw.data)) {
       trace.record("tool_call", {
@@ -123,11 +121,12 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
       result: resultString,
       suspectedInjection,
     });
+    budget.checkTime(); // R8: re-checked the moment the call returns
     return raw as ToolResult<T>;
   };
 
   return {
-    toolCallsUsed: (): number => used,
+    toolCallsUsed: (): number => budget.used().toolCalls,
     searchProviders: (args: {
       service: string;
       area: string;

@@ -13,7 +13,17 @@ import { freeSlots } from "./slots.js";
 export type WriteOpts = ToolOpts & {
   settings: MockSettings;
   forced: ForcedQueue;
+  /** a simulated pause: the run's budget may cut it short (R8); returns the ms actually paused */
+  wait?: (ms: number) => number;
 };
+
+/** Our own server dying mid-call (forced only). Not an error the run handles — the process is gone. */
+export class SimulatedCrash extends Error {
+  constructor(message: string) {
+    super(`simulated server crash ${message}`);
+    this.name = "SimulatedCrash";
+  }
+}
 
 export type ForcedQueue = { take: (tool: string, nth: number) => { outcome: string } | undefined };
 
@@ -111,14 +121,16 @@ export const book = (
     return { ok: false, error: "hold_expired", transient: false, ...expiry };
   }
 
-  // forced-only faults (NFR-4): our server dies mid-call, before or after the provider committed
-  if (forced === "server_crash_before_commit")
-    throw new Error("simulated server crash before the provider committed");
+  // forced-only faults (NFR-4), before or after the provider committed: `server_crash_*` is
+  // our server dying mid-call; `throw_*` is an unforeseen error the run itself must word (R5)
+  if (forced === "server_crash_before_commit") throw new SimulatedCrash("before the provider committed");
+  if (forced === "throw_before_commit") throw new Error("unexpected provider failure before commit (forced)");
   const attempt = nextAttempt(db, "book", args.idempotencyKey);
-  const crashAfterCommit = forced === "server_crash_after_commit";
-  const outcome = crashAfterCommit ? "ok" : (forced ?? drawBookOutcome(opts, args.idempotencyKey, attempt));
+  const failAfterCommit = forced === "server_crash_after_commit" || forced === "throw_after_commit" ? forced : undefined;
+  const outcome = failAfterCommit ? "ok" : (forced ?? drawBookOutcome(opts, args.idempotencyKey, attempt));
   if (outcome === "timeout" || outcome === "timeout_booked") {
-    opts.clock.advanceMs(settings.timeoutPauseMs); // the pause is on the clock (settings table)
+    // the pause is on the clock (settings table), cut short when the run's time is up
+    opts.clock.advanceMs(opts.wait ? opts.wait(settings.timeoutPauseMs) : settings.timeoutPauseMs);
   }
   if (outcome === "ok" || outcome === "timeout_booked") {
     const bookingId = randomUUID();
@@ -159,7 +171,8 @@ export const book = (
     // the hold is consumed either way; a plain timeout still returns after the pause
     if (outcome === "timeout_booked") return { ok: false, error: "timeout", transient: true };
     db.prepare(`DELETE FROM mock_hold WHERE id = ?`).run(args.holdId);
-    if (crashAfterCommit) throw new Error("simulated server crash after the provider committed");
+    if (failAfterCommit === "server_crash_after_commit") throw new SimulatedCrash("after the provider committed");
+    if (failAfterCommit === "throw_after_commit") throw new Error("unexpected provider failure after commit (forced)");
     return { ok: true, data: { bookingId } };
   }
   if (outcome === "timeout") {
@@ -204,7 +217,8 @@ export const getBookingStatus = (
   opts: WriteOpts,
   idempotencyKey: string,
 ): ToolResult<{ status: string; bookingId?: string }> => {
-  void opts;
+  // forced only: the status can't be read at all (R5's "unreadable" case)
+  if (forcedOutcome(opts, "get_booking_status") === "throw") throw new Error("booking status unreadable (forced)");
   const row = db
     .prepare(`SELECT final_result, booking_id FROM mock_idempotency WHERE key = ? AND tool = 'book'`)
     .get(idempotencyKey) as { final_result: string; booking_id: string | null } | undefined;

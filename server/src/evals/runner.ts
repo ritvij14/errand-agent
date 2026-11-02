@@ -4,7 +4,8 @@ import { createClock } from "../shared/clock.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { createConversationService } from "../conversations/index.js";
 import { scriptedModel } from "../agent/index.js";
-import { seedMockWorld, type ForcedQueue } from "../tools/index.js";
+import { createMockSettings, seedMockWorld, type ForcedQueue, type MockSettings } from "../tools/index.js";
+import { CAPS } from "../shared/run-budget.js";
 
 // The scenario runner (§ 2.5.10): each scenario gets its own fresh database, a fixed
 // seed and clock, the scripted model, and a conversation bound to one user. The runner
@@ -47,6 +48,8 @@ export type EvalScenario = {
   name: string;
   description: string;
   seed: string;
+  /** mock settings for this scenario only (e.g. a longer timeout pause) */
+  settings?: Partial<MockSettings>;
   steps: EvalScenarioStep[];
 };
 
@@ -60,8 +63,6 @@ export type ScenarioResult = {
   checkedInvariants: string[];
   firstFailure: string | null;
 };
-
-const CAPS = { modelCalls: 6, toolCalls: 10, elapsedMs: 60_000 } as const;
 
 export const describeSteps = (steps: EvalScenarioStep[]): string =>
   steps
@@ -93,7 +94,12 @@ export const runScenario = async (
     },
   };
   const start = () =>
-    createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed, forced } });
+    createConversationService({
+      db,
+      clock,
+      model: scriptedModel,
+      mock: { seed: scenario.seed, forced, settings: { ...createMockSettings(), ...scenario.settings } },
+    });
   let service = start();
   const conversationId = service.createConversation(userId).id;
   let firstFailure: string | null = null;
