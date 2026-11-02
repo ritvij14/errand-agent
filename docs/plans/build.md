@@ -214,7 +214,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U16 Time-window parser
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 17 parser tests red→green (`server/src/agent/time-window.test.ts`; suite 111/111 + E0). Table rows per V-6; "this week" = today→this Sunday (§2.3); partial merge per R9 (bounds-only keeps dates, dates keep bounds); past phrases → TIME_OUT_OF_RANGE.
 - **Depends on.** U04.
 - **Covers.** V-6, NFR-7, R9 (partial time merge).
 - **Build.** chrono-node 2 on the calendar clock's now in IST, plus our rules for "this week", "mornings only", "not before 10 a.m.", "between 9 and 11am", "Saturday". A merge function that applies a partial correction ("after 11") to a known window. `TIME_OUT_OF_RANGE` for past or beyond 14 days.
