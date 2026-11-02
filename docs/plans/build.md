@@ -157,7 +157,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U11 Traces core
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 5 trace tests red→green (`server/src/tracing/tracing.test.ts`; suite 78/78). Allow-list per type (secrets dropped by construction), clock_at vs duration_ms (R8 story), model-call tokens/cost null + not_available. Migration `003_trace_events.sql`. Commit `+ U11 sha`.
 - **Depends on.** U04, U05.
 - **Covers.** MH-7, § 2.5.9 shape, event allow-list, no secrets.
 - **Build.** `server/src/tracing`: record events for a run with `seq`, `type`, `clock_at`, `duration_ms` and only each type's listed fields. Read a run's events in order. Tokens and cost recorded as null with `not_available`.
