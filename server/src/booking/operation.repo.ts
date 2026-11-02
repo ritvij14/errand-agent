@@ -61,6 +61,12 @@ export const operationRepo = (db: Db) => ({
   byKey: (key: string): OperationRecord | undefined =>
     db.prepare(`SELECT * FROM operation WHERE idempotency_key = ?`).get(key) as OperationRecord | undefined,
 
+  /** Every operation left in flight — at server start these are what a stop interrupted (§ 2.5.6). */
+  allInFlight: (): OperationRecord[] =>
+    db
+      .prepare(`SELECT * FROM operation WHERE status = 'in_flight' ORDER BY created_at`)
+      .all() as OperationRecord[],
+
   inFlightFor: (workflowId: string): OperationRecord | undefined =>
     db.prepare(`SELECT * FROM operation WHERE workflow_id = ? AND status = 'in_flight'`).get(workflowId) as
       OperationRecord | undefined,

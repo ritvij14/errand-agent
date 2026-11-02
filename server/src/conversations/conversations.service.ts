@@ -2,7 +2,7 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, readTrace } from "../tracing/index.js";
 import { approvalRepo } from "../approval/index.js";
-import { authorizeWrite } from "../booking/index.js";
+import { authorizeWrite, operationRepo } from "../booking/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel } from "../agent/index.js";
 import {
@@ -61,7 +61,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
   const runTurn = async (
     userId: string,
     conversationId: string,
-    trigger: "message" | "approval_decision",
+    trigger: "message" | "approval_decision" | "recovery",
     step: (text: string) => Promise<ApplyOutcome>,
     userMessage?: { text: string; clientMessageId: string },
   ): Promise<SendResult> => {
@@ -81,16 +81,6 @@ export const createConversationService = (deps: ConversationsDeps) => {
       userId,
       phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none",
     });
-    if (userMessage)
-      repo.addMessage(
-        conversationId,
-        run.id,
-        "user",
-        userMessage.text,
-        [],
-        clock.now().getTime(),
-        userMessage.clientMessageId,
-      );
     try {
       const gateway = createToolGateway({
         db,
@@ -112,6 +102,27 @@ export const createConversationService = (deps: ConversationsDeps) => {
           retryWaitsMs: mockSettings.retryWaitsMs,
         },
       });
+      // § 2.5.2 rule 5: a booking cut off by a restart is finished before the new input is read
+      const recovered = trigger === "recovery" ? undefined : workflowStore.recover(conversationId);
+      if (recovered?.reply)
+        repo.addMessage(
+          conversationId,
+          run.id,
+          "agent",
+          recovered.reply,
+          (recovered.parts ?? []) as ReplyPart[],
+          clock.now().getTime(),
+        );
+      if (userMessage)
+        repo.addMessage(
+          conversationId,
+          run.id,
+          "user",
+          userMessage.text,
+          [],
+          clock.now().getTime(),
+          userMessage.clientMessageId,
+        );
       const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
       const toolCalls = gateway.toolCallsUsed();
       const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
@@ -255,6 +266,28 @@ export const createConversationService = (deps: ConversationsDeps) => {
           clientMessageId,
         },
       );
+    },
+
+    /**
+     * Server start (§ 2.5.6): every operation left in flight gets its own `recovery` run —
+     * own trace, a tool client bound to the operation's user — and the outcome is added
+     * to its conversation as an agent message.
+     */
+    recoverInFlight: async (): Promise<void> => {
+      for (const op of operationRepo(db).allInFlight()) {
+        await runTurn(
+          op.user_id,
+          op.conversation_id,
+          "recovery",
+          async () =>
+            workflowStore.recover(op.conversation_id) ?? {
+              phase: "none",
+              reply: "",
+              code: "help",
+              facts: {},
+            },
+        );
+      }
     },
 
     /** Approve / Decline buttons (§ 2.5.5): a run with trigger `approval_decision`. */

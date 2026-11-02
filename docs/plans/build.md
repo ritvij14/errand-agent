@@ -308,7 +308,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U24 Restart recovery
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/recovery.flow.test.ts` (crash after the provider committed → one booking, "Your booking went through" (R7); startup recovery is its own `recovery` run whose only tool call is `get_booking_status`; `not_found` + hold valid → resumed with the same key; `not_found` + hold expired → nothing booked, new card; the next message's run recovers first; nothing in flight → no run). Suite 202/202, evals 16/16 (20a/b/c new). QA `/tmp/verify-U24/drive.txt`: booked on the dev server, operation reset to `in_flight` + workflow `verifying` in the DB (the R7 state), server killed and restarted → chat shows "Your booking went through: … id 5ad8dd2a…", one `recovery` run `completed`, operation `succeeded`, one booking.
 - **Depends on.** U22, U13.
 - **Covers.** MH-3 restarts, NFR-5, § 2.5.2 rule 5, § 2.5.6 restart recovery, R7.
 - **Build.** At server start, every `in_flight` operation gets its own `recovery` run with its own trace, caps and user-bound client. The same check runs at the start of any run in that conversation. `book`: status first, resume only while the hold is valid. The outcome is appended as an agent message.

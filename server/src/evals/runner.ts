@@ -15,6 +15,8 @@ export type EvalScenarioStep =
   | { step: "advance"; ms: number }
   /** send this text while the NEXT step's run is still in progress (tests CONVERSATION_BUSY) */
   | { step: "send_concurrently"; text: string }
+  /** drop everything held in memory, start a fresh service on the same database, run startup recovery */
+  | { step: "restart" }
   /** queue a forced outcome for the next call of a mock tool (NFR-4) */
   | { step: "force"; tool: string; outcome: string }
   /** tap a slot and press Confirm: sends that slot's pickText, as the page does (ADR-007) */
@@ -90,12 +92,9 @@ export const runScenario = async (
       return i === -1 ? undefined : { outcome: queued.splice(i, 1)[0]!.outcome };
     },
   };
-  const service = createConversationService({
-    db,
-    clock,
-    model: scriptedModel,
-    mock: { seed: scenario.seed, forced },
-  });
+  const start = () =>
+    createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed, forced } });
+  let service = start();
   const conversationId = service.createConversation(userId).id;
   let firstFailure: string | null = null;
   let lastReply: string | null = null;
@@ -135,7 +134,13 @@ export const runScenario = async (
     concurrent = null;
     const side =
       sideText === null ? undefined : service.sendMessage(userId, conversationId, sideText, randomUUID());
-    keep(await main, label);
+    try {
+      keep(await main, label);
+    } catch (error) {
+      // a forced `server_crash_*` outcome: the run dies mid-call, like a killed process
+      if (!(error instanceof Error && error.message.startsWith("simulated server crash"))) throw error;
+      lastOutcome = "server_crashed";
+    }
     if (side) keep(await side, `send_concurrently "${sideText}"`, true);
   };
   const send = (label: string, text: string): Promise<void> =>
@@ -160,6 +165,29 @@ export const runScenario = async (
       await send(step.step, step.text);
     } else if (step.step === "send_concurrently") {
       concurrent = step.text;
+    } else if (step.step === "restart") {
+      service = start();
+      await service.recoverInFlight();
+      const run = db
+        .prepare(
+          `SELECT id, outcome FROM run WHERE conversation_id = ? AND trigger = 'recovery' ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(conversationId) as { id: string; outcome: string } | undefined;
+      const message = run
+        ? (db.prepare(`SELECT text, parts FROM message WHERE run_id = ? AND role = 'agent'`).get(run.id) as {
+            text: string;
+            parts: string;
+          })
+        : undefined;
+      if (!run || !message) recordFailure("restart → no recovery run");
+      else {
+        lastReply = message.text;
+        lastParts = JSON.parse(message.parts) as Record<string, unknown>[];
+        lastOutcome = run.outcome;
+        lastRunId = run.id;
+        const card = lastParts.find((p) => p.type === "approval_card") as { approvalId: string } | undefined;
+        if (card) lastCardId = card.approvalId;
+      }
     } else if (step.step === "force") {
       queued.push({ tool: step.tool, outcome: step.outcome });
     } else if (step.step === "pick") {

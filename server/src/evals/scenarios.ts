@@ -244,4 +244,71 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "expect", outcome: "CONVERSATION_BUSY", replyContains: "Booked:", agentBookings: 1 },
     ],
   },
+  // ——— restart mid-booking (§ 2.5.6 restart recovery, U24): three variants ———
+  "20a": {
+    id: "20a",
+    name: "Restart mid-booking: status booked → reported, one booking",
+    description:
+      "MH-3: the server dies after the provider committed; startup recovery checks the status and reports the booking.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "server_crash_after_commit" },
+      { step: "click", decision: "approve" },
+      { step: "expect", outcome: "server_crashed" },
+      { step: "restart" },
+      {
+        step: "expect",
+        phase: "done",
+        replyContains: "Your booking went through",
+        agentBookings: 1,
+        lastRunToolCalls: ["get_booking_status:booked"],
+      },
+    ],
+  },
+  "20b": {
+    id: "20b",
+    name: "Restart mid-booking: not_found + hold valid → resumed with the same key, one booking",
+    description:
+      "MH-3: the server dies before the provider committed; the hold is still valid, so recovery books with the same key.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "server_crash_before_commit" },
+      { step: "click", decision: "approve" },
+      { step: "force", tool: "book", outcome: "ok" },
+      { step: "restart" },
+      {
+        step: "expect",
+        phase: "done",
+        replyContains: "Booked:",
+        agentBookings: 1,
+        lastRunToolCalls: ["get_booking_status:not_found", "book:ok", "get_booking_status:booked"],
+      },
+    ],
+  },
+  "20c": {
+    id: "20c",
+    name: "Restart mid-booking: not_found + hold expired → asks again, nothing booked",
+    description:
+      "MH-3: never books long after the yes — the hold ran out while the server was down, so the user approves again.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "pick" },
+      { step: "force", tool: "book", outcome: "server_crash_before_commit" },
+      { step: "click", decision: "approve" },
+      { step: "advance", ms: 660_000 },
+      { step: "restart" },
+      {
+        step: "expect",
+        phase: "awaiting_approval",
+        replyContains: "Nothing was booked",
+        agentBookings: 0,
+        cardMatchesApproval: true,
+      },
+    ],
+  },
 };

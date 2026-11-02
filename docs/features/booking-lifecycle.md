@@ -1,6 +1,6 @@
 # Booking Lifecycle (MH-3, § 2.5.6)
 
-> Status: **Building** — U21 executes and verifies a booking; U22 handles every row of the § 2.5.6 decision table; U23 repeated yes and overlapping messages. Restart recovery (U24) follows.
+> Status: **Building** — U21 executes and verifies a booking; U22 handles every row of the § 2.5.6 decision table; U23 repeated yes and overlapping messages; U24 restart recovery.
 
 ## What exists
 
@@ -30,11 +30,21 @@
 
 - The approval is `used` after the first yes and the database allows one operation per approval, so a second yes or a click finds that operation and reports it — `reportUsed` in `agent/workflow.ts`, no tool call (eval 13). A message sent while the approve run is in progress is refused with `CONVERSATION_BUSY` (eval 14; see `conversations.md` for why parallel HTTP requests run one after the other here).
 
+## Restart recovery (U24)
+
+- An `in_flight` operation means the server stopped between saving and finishing. `workflowStore.recover(conversationId)` (`agent/workflow.ts` `recoverOperation`) handles a workflow still `executing` / `verifying`, **status first**:
+  - `booked` → operation `succeeded` (`recovered: true`), workflow `done`, reply "Your booking went through: … Booking id: X."
+  - `not_found` and the workflow's hold still valid (`hold.expiresAt` > now) → resume: `executeOperation` books again with the **same key** (the approval still covers it).
+  - anything else (`not_found` with the hold expired, or `failed`) → operation `failed`, the slot is held again, and a **new pending card** asks for approval ("Nothing was booked — …"); if the slot is gone the options come back. Never books long after the user's yes.
+- **When:** (1) server start — `conversationService.recoverInFlight()` (called from `src/index.ts` before listening) gives every in-flight operation its own `recovery` run (own trace, tool client bound to the operation's user); (2) the start of any run in that conversation, before the new input is read (§ 2.5.2 rule 5) — the outcome is saved as its own agent message ahead of the user's message.
+- **Crash points for tests and evals** (forced `book` outcomes only): `server_crash_before_commit` throws before the provider does anything; `server_crash_after_commit` commits the booking + idempotency record, then throws — the R7 case.
+- A run that dies this way keeps no `ended_at` / outcome (it was cut off). Invariant I-5 only checks runs that ended.
+
 ## Evals
 
-- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking.
+- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking; 20a/b/c restart mid-booking (booked → reported; `not_found` + hold valid → resumed, same key; `not_found` + hold expired → asks again, nothing booked) using the runner's `restart` step (fresh service on the same database + startup recovery).
 - Every scenario that approves a booking forces its `book` outcome: keys contain the random operation id, so an unforced `book` draws a different result each run (B4). `runner.test.ts` guards this.
 
 ## Not yet
 
-- Restart recovery of `in_flight` operations (U24).
+- Recovery for cancel / reschedule (U28 / U29). Caps on the recovery run (U25).

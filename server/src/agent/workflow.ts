@@ -454,6 +454,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         : advance(saved.workflow);
     },
 
+    /**
+     * § 2.5.2 rule 5 / § 2.5.6 restart recovery: a workflow still `executing` / `verifying`
+     * was cut off mid-booking. Finish it before anything else; undefined when nothing is.
+     */
+    recover: (conversationId: string): ApplyOutcome | undefined => {
+      const w = getActive(conversationId);
+      if (!w || (w.phase !== "executing" && w.phase !== "verifying")) return undefined;
+      const op = operations.inFlightFor(w.id);
+      return op ? recoverOperation(w, op) : undefined;
+    },
+
     /** The Approve / Decline buttons (§ 2.5.5): the same rules as a typed answer. */
     decide: (conversationId: string, approvalId: string, decision: "approve" | "decline"): ApplyOutcome => {
       const used = approvals.getById(approvalId);
@@ -858,6 +869,58 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       reply: `Booked: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${outcome.bookingId}.`,
       facts,
     };
+  }
+
+  /**
+   * Status first, never a blind retry: `booked` → done; `not_found` while the hold is still
+   * valid → resume with the same key (the approval still covers it); otherwise nothing was
+   * booked — hold the slot again and ask for a fresh approval. Never books long after the yes.
+   */
+  function recoverOperation(w: WorkflowRow, op: OperationRecord): ApplyOutcome {
+    const checked = bookTools!.status(op.idempotency_key);
+    const status = checked.ok ? checked.data.status : checked.error;
+    const selection = w.selection!;
+    if (checked.ok && status === "booked" && checked.data.bookingId) {
+      operations.finish(op.id, "succeeded", { bookingId: checked.data.bookingId, recovered: true }, nowMs());
+      trace?.record("operation_event", {
+        event: "succeeded",
+        kind: "book",
+        key: op.idempotency_key,
+        result: checked.data.bookingId,
+      });
+      const finished = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "done" }));
+      return {
+        phase: "done",
+        reply: `Your booking went through: ${nameOf(w, selection.providerId)} on ${slotLabel(selection.slot)}, ${rupees(w.hold?.quotedPrice ?? 0)}. Booking id: ${checked.data.bookingId}.`,
+        facts: (finished.workflow ?? w).facts,
+      };
+    }
+    if (status === "not_found" && (w.hold?.expiresAt ?? 0) > nowMs()) return executeOperation(w);
+    const holdRanOut = status === "not_found";
+    operations.finish(
+      op.id,
+      "failed",
+      { error: holdRanOut ? "hold_expired" : status, checkedStatus: status, recovered: true },
+      nowMs(),
+    );
+    trace?.record("operation_event", {
+      event: "failed",
+      kind: "book",
+      key: op.idempotency_key,
+      result: status,
+    });
+    const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+      ...wf,
+      hold: null,
+      phase: "holding",
+    }));
+    if (!saved.ok || !saved.workflow)
+      return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    const next = advance(saved.workflow); // re-hold the same slot → a new card, or the options left
+    const why = holdRanOut
+      ? "the server restarted before your booking finished, and the hold ran out"
+      : `the provider says ${status}`;
+    return { ...next, reply: `Nothing was booked — ${why}. ${next.reply}` };
   }
 
   /**

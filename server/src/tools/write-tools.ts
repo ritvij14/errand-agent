@@ -111,8 +111,12 @@ export const book = (
     return { ok: false, error: "hold_expired", transient: false, ...expiry };
   }
 
+  // forced-only faults (NFR-4): our server dies mid-call, before or after the provider committed
+  if (forced === "server_crash_before_commit")
+    throw new Error("simulated server crash before the provider committed");
   const attempt = nextAttempt(db, "book", args.idempotencyKey);
-  const outcome = forced ?? drawBookOutcome(opts, args.idempotencyKey, attempt);
+  const crashAfterCommit = forced === "server_crash_after_commit";
+  const outcome = crashAfterCommit ? "ok" : (forced ?? drawBookOutcome(opts, args.idempotencyKey, attempt));
   if (outcome === "timeout" || outcome === "timeout_booked") {
     opts.clock.advanceMs(settings.timeoutPauseMs); // the pause is on the clock (settings table)
   }
@@ -155,6 +159,7 @@ export const book = (
     // the hold is consumed either way; a plain timeout still returns after the pause
     if (outcome === "timeout_booked") return { ok: false, error: "timeout", transient: true };
     db.prepare(`DELETE FROM mock_hold WHERE id = ?`).run(args.holdId);
+    if (crashAfterCommit) throw new Error("simulated server crash after the provider committed");
     return { ok: true, data: { bookingId } };
   }
   if (outcome === "timeout") {

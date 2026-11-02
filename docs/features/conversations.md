@@ -21,6 +21,7 @@
 ## Invariants worth keeping
 
 - **Busy marker is in-memory** (2.3): one Node process; cleared on every end path via `finally`; a restart clears it (recovery comes in U24).
+- **Recovery first** (U24, § 2.5.2 rule 5): every `message` / `approval_decision` run first calls `workflowStore.recover` — a booking a restart cut off is finished and its outcome saved as an agent message *before* the user's message is saved and read. `recoverInFlight()` runs the same check as `recovery`-trigger runs at server start (`src/index.ts`).
 - **When `CONVERSATION_BUSY` is actually seen** (U23): a run never waits on real time — the clock is controllable and the scripted model answers at once — so Node finishes one HTTP request's run before it reads the next. Two parallel HTTP requests therefore run one after the other (both 200; the second sees the first's result, e.g. "Already booked"). The refusal fires when a message arrives *during* a run, which in-process callers can do: `booking.flow.test.ts` (`Promise.all` of an Approve click and a "yes") and eval 14 prove it is refused, not queued. It will matter on the real surface once a run can wait on real time (a live model, phase 3).
 - **Message ordering** is `created_at, rowid` — same-millisecond messages stay in insertion order.
 - **State before tool calls (NFR-5)**: messages and run rows are written as produced; the skeleton writes user/agent messages at save points.
