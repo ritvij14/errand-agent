@@ -849,7 +849,7 @@ It calls the conversation runner directly — no HTTP, no cookies (2.5.1).
 | `click approve` / `click decline` | The user clicks the card's button (latest approval)                                                                                 |
 | `advance 11m`                     | Move the clock forward (e.g. to expire a hold)                                                                                      |
 | `restart`                         | Simulate a server restart: drop everything held in memory (busy markers, runner), reopen the database, run startup recovery (2.5.6) |
-| `send_concurrently "…"`           | Send a message while a run is still in progress (tests `CONVERSATION_BUSY`)                                                         |
+| `send_concurrently "…"`           | Send a message while the next step's run is still in progress (tests `CONVERSATION_BUSY`)                                           |
 | `expect …`                        | Check something after a step: phase, an asked-for detail, an approval's status, a tool call happened / didn't                       |
 
 **Fixed lines + `expect` checks.** The simulated user sends the same lines in order, whatever the agent replies; after a step, `expect` checks what the agent asked or did. So an agent that asks an unnecessary question fails the scenario — exactly what MH-1 ("never re-ask a known fact") needs. A reactive user that answers whatever is asked would hide that bug.

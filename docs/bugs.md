@@ -30,6 +30,14 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 - **Regression test (red → green).** `search.flow.test.ts` "a save that fails for a reason other than the one-active-workflow race is raised".
 - **Commit.** U18.
 
+### B4 — Booking evals passed or failed by luck
+
+- **What broke.** Eval 14 failed once with "That slot was taken…" though nothing in it asks for `slot_taken`; run again, it could pass.
+- **Why.** The mock draws a `book` outcome from seed + idempotency key + attempt (§ 2.5.4), and the key is `<operation id>:<n>` — a random UUID. So any scenario that approved a booking without queuing a `book` outcome got a fresh random result each run (`okProb` 0.7), breaking NFR-4 (reproducible evals). The design's draw rule is kept: random outcomes in the app are intended.
+- **Fix.** `server/src/evals/scenarios.ts`: evals 13 and 14 queue `book → ok`; every booking scenario now forces its outcome.
+- **Regression test (red → green).** `evals/runner.test.ts` "every scenario that approves a booking queues its book outcome…" (red: `['13','14']`). Evals then passed 5 runs in a row.
+- **Commit.** U23.
+
 ## Invariants found broken by tests
 
 _None yet._

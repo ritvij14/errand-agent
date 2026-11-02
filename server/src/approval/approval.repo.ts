@@ -58,20 +58,32 @@ export const approvalRepo = (db: Db) => ({
 
   /** The one waiting (pending or approved) approval of a workflow, if any. */
   getOpen: (workflowId: string): ApprovalRecord | undefined =>
-    db.prepare(`SELECT * FROM approval WHERE workflow_id = ? AND status IN ('pending','approved')`).get(workflowId) as
-      | ApprovalRecord
-      | undefined,
+    db
+      .prepare(`SELECT * FROM approval WHERE workflow_id = ? AND status IN ('pending','approved')`)
+      .get(workflowId) as ApprovalRecord | undefined,
+
+  /** The conversation's most recently used approval — what a repeated "yes" refers to (§ 2.5.6). */
+  lastUsed: (conversationId: string): ApprovalRecord | undefined =>
+    db
+      .prepare(
+        `SELECT * FROM approval WHERE conversation_id = ? AND status = 'used' ORDER BY used_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(conversationId) as ApprovalRecord | undefined,
 
   /** pending → approved / declined; false when it was no longer pending. */
   decide: (id: string, status: "approved" | "declined", via: "button" | "typed", now: number): boolean =>
     db
-      .prepare(`UPDATE approval SET status = ?, decided_via = ?, decided_at = ? WHERE id = ? AND status = 'pending'`)
+      .prepare(
+        `UPDATE approval SET status = ?, decided_via = ?, decided_at = ? WHERE id = ? AND status = 'pending'`,
+      )
       .run(status, via, now, id).changes === 1,
 
   /** pending / approved → voided, with the reason (§ 2.5.5 life step 4). */
   voidOpen: (id: string, reason: string, now: number): boolean =>
     db
-      .prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status IN ('pending','approved')`)
+      .prepare(
+        `UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status IN ('pending','approved')`,
+      )
       .run(reason, now, id).changes === 1,
 
   /**
@@ -79,12 +91,17 @@ export const approvalRepo = (db: Db) => ({
    * anything was booked (§ 2.5.6 hold_expired rows): the user must approve the new details.
    */
   voidUsed: (id: string, reason: "price_changed" | "slot_changed", now: number): boolean =>
-    db.prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status = 'used'`).run(reason, now, id)
-      .changes === 1,
+    db
+      .prepare(
+        `UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status = 'used'`,
+      )
+      .run(reason, now, id).changes === 1,
 
   /** approved → used (§ 2.5.5 life step 5): single use; false if it wasn't approved. */
   markUsed: (id: string, now: number): boolean =>
-    db.prepare(`UPDATE approval SET status = 'used', used_at = ? WHERE id = ? AND status = 'approved'`).run(now, id).changes === 1,
+    db
+      .prepare(`UPDATE approval SET status = 'used', used_at = ? WHERE id = ? AND status = 'approved'`)
+      .run(now, id).changes === 1,
 });
 
 /** A pending approval older than the hold's lifetime is stale (§ 2.5.5 life step 6). */

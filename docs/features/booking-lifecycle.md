@@ -1,6 +1,6 @@
 # Booking Lifecycle (MH-3, § 2.5.6)
 
-> Status: **Building** — U21 executes and verifies a booking; U22 handles every row of the § 2.5.6 decision table. Repeated yes and concurrency (U23), restart recovery (U24) follow.
+> Status: **Building** — U21 executes and verifies a booking; U22 handles every row of the § 2.5.6 decision table; U23 repeated yes and overlapping messages. Restart recovery (U24) follows.
 
 ## What exists
 
@@ -26,10 +26,15 @@
 - **I-3** a "Booked:" reply's run has a `get_booking_status` tool call that returned `booked`, before the operation's `succeeded` event.
 - Negative tests prove I-1 and I-3 fire (`evals/runner.test.ts`).
 
+## Repeated yes (U23)
+
+- The approval is `used` after the first yes and the database allows one operation per approval, so a second yes or a click finds that operation and reports it — `reportUsed` in `agent/workflow.ts`, no tool call (eval 13). A message sent while the approve run is in progress is refused with `CONVERSATION_BUSY` (eval 14; see `conversations.md` for why parallel HTTP requests run one after the other here).
+
 ## Evals
 
-- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked.
+- 1 happy path; 6 price change after approval; 7 slot gone after approval; 8 same-price re-hold (V-4, trace `book:hold_expired → hold_slot:ok → book:ok → get_booking_status:booked`); 9 timeout after success (`book:timeout → get_booking_status:booked`); 10 timeout, retry same key; 11 `slot_taken` → pick another → booked; 13 yes, yes, click → one booking; 14 yes during the approve run → `CONVERSATION_BUSY`, one booking.
+- Every scenario that approves a booking forces its `book` outcome: keys contain the random operation id, so an unforced `book` draws a different result each run (B4). `runner.test.ts` guards this.
 
 ## Not yet
 
-- Repeated yes reporting the operation's status (U23). Restart recovery of `in_flight` operations (U24).
+- Restart recovery of `in_flight` operations (U24).

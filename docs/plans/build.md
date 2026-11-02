@@ -296,7 +296,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U23 Repeated yes and concurrent messages
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/booking.flow.test.ts` (yes, yes, click → one `book` call, repeats name the booking id and call no tool; a click on a failed booking's approval says nothing was booked; an Approve click and a "yes" together → the "yes" gets `CONVERSATION_BUSY` and starts no run); replay already covered by `conversations.test.ts`. Bug B4 found (unforced `book` in evals = random outcome), guarded by `runner.test.ts`. Suite 196/196, evals 13/13 (13, 14 new), stable over 5 runs. QA `/tmp/verify-U23/drive.txt`: parallel curl click + "yes" through Vite → one operation and one booking per approval, the second answer reports it ("Already booked … id X" / "nothing was booked (slot_taken)"). Both returned 200, not 409: runs never wait on real time, so Node runs them one after the other — documented in `conversations.md`; the 409 is proven in-process.
 - **Depends on.** U22.
 - **Covers.** MH-3 (repeated yes), § 2.3 overlapping messages, § 2.5.6 repeated yes, R2.
 - **Build.** A yes or click on a used approval reports the operation's status (`APPROVAL_ALREADY_USED`) and makes no call. `send_concurrently` gets `CONVERSATION_BUSY`. A resent client message id replays the stored reply.

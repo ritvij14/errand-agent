@@ -26,7 +26,10 @@ const commitOf = (): string => {
 };
 
 export const runAllEvals = async (): Promise<{ failed: number; total: number; rows: string[] }> => {
-  const rows: string[] = ["| id | scenario | expected | actual | pass | notes |", "| --- | --- | --- | --- | --- | --- |"];
+  const rows: string[] = [
+    "| id | scenario | expected | actual | pass | notes |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
   let failed = 0;
   let total = 0;
   for (const scenario of Object.values(SCENARIOS) as EvalScenario[]) {

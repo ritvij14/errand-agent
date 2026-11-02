@@ -225,6 +225,11 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         }
       }
 
+      if (read.kind === "decision" && read.decision === "yes") {
+        const used = approvals.lastUsed(conversationId);
+        if (used) return reportUsed(used); // § 2.5.6 repeated yes: no second call
+      }
+
       if (read.kind === "unknown" || read.kind === "decision") {
         // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
         const phase = getActive(conversationId)?.phase ?? "collecting";
@@ -278,6 +283,8 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
     /** The Approve / Decline buttons (§ 2.5.5): the same rules as a typed answer. */
     decide: (conversationId: string, approvalId: string, decision: "approve" | "decline"): ApplyOutcome => {
+      const used = approvals.getById(approvalId);
+      if (used?.status === "used") return reportUsed(used);
       const active = getActive(conversationId);
       if (!active) return { phase: "none", reply: "That approval is no longer valid — nothing is waiting for your approval.", facts: {} as Facts, code: "APPROVAL_STALE" };
       return decideOn(active, approvalId, decision, "button");
@@ -385,6 +392,25 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     }
   }
 
+  /**
+   * § 2.5.6 repeated "yes": the approval is used and the database allows one operation per
+   * approval, so report that operation's status instead of calling anything.
+   */
+  function reportUsed(record: ApprovalRecord): ApplyOutcome {
+    const op = operations.forApproval(record.id);
+    const row = db.prepare(`SELECT * FROM workflow WHERE id = ?`).get(record.workflow_id) as WorkflowRecord;
+    const w = decode(row);
+    const what = `${nameOf(w, record.provider_id)} on ${slotLabel(record.slot)}`;
+    const result = op?.result ? (JSON.parse(op.result) as { bookingId?: string; checkedStatus?: string; error?: string }) : {};
+    const reply =
+      op?.status === "succeeded"
+        ? `Already booked: ${what}. Booking id: ${result.bookingId}. I didn't book it again.`
+        : op?.status === "in_flight"
+          ? `I'm still confirming ${what} with the provider — I won't book it twice.`
+          : `That approval was already used and nothing was booked for ${what} (${result.checkedStatus ?? result.error ?? "failed"}).`;
+    return { phase: w.phase, reply, facts: w.facts, code: "APPROVAL_ALREADY_USED" };
+  }
+
   function cardOutcome(w: WorkflowRow, record: ApprovalRecord, reply: string, code?: string): ApplyOutcome {
     const name = (w.candidates as OptionBlock[] | null)?.find((b) => b.provider.id === record.provider_id)?.provider.name ?? record.provider_id;
     return { phase: w.phase, reply, facts: w.facts, parts: [approvalCardPart(record, name)], ...(code ? { code } : {}) };
@@ -398,6 +424,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   function decideOn(w: WorkflowRow, approvalId: string | undefined, decision: "approve" | "decline", via: "button" | "typed"): ApplyOutcome {
     const open = approvals.getOpen(w.id);
     const target = approvalId ? approvals.getById(approvalId) : open;
+    if (target?.status === "used") return reportUsed(target);
     if (target && target.id === open?.id && target.status === "approved") {
       return cardOutcome(w, target, "You've already approved this booking.", "APPROVAL_ALREADY_USED");
     }

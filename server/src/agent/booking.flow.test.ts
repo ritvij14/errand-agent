@@ -74,6 +74,8 @@ const setup = (...bookOutcomes: string[]) => {
   return {
     testDb,
     clock,
+    service,
+    conversationId,
     say,
     force,
     approveFirstOption,
@@ -199,6 +201,63 @@ describe("execute and verify a booking", () => {
     expect(t.agentBookings()).toHaveLength(1);
     expect(t.operation()).toMatchObject({ status: "succeeded" });
     expect(reply.message.text).toMatch(/^Booked:/);
+    t.testDb.close();
+  });
+});
+
+describe("repeated yes and overlapping messages (MH-3, § 2.5.6, § 2.3)", () => {
+  const toolCalls = (t: ReturnType<typeof setup>, runId: string) => t.bookCalls(runId).map((c) => c.tool);
+
+  it("typed yes, yes again, then the Approve button → one book call; the repeats report the booking id and call no tool", async () => {
+    const t = setup("ok");
+    const { reply, approvalId } = await t.approveFirstOption();
+    expect(reply.message.text).toMatch(/^Booked:/);
+    const bookingId = t.agentBookings()[0]!.id;
+
+    const again = await t.say("yes");
+    expect(again.message.text).toContain(bookingId);
+    expect(again.message.text).toMatch(/already booked/i);
+    expect(toolCalls(t, again.runId)).toEqual([]);
+
+    const clicked = await t.service.decideApproval(ALICE, approvalId, "approve");
+    if (!clicked.ok) throw new Error(clicked.code);
+    expect(clicked.reply.message.text).toMatch(/already booked/i);
+    expect(clicked.reply.message.text).toContain(bookingId);
+    expect(toolCalls(t, clicked.reply.runId)).toEqual([]);
+
+    expect(t.agentBookings()).toHaveLength(1);
+    expect(t.testDb.db.prepare(`SELECT COUNT(*) n FROM operation`).get()).toEqual({ n: 1 });
+    t.testDb.close();
+  });
+
+  it("a click on an approval whose booking failed says nothing was booked, and calls no tool", async () => {
+    const t = setup("slot_taken");
+    const { approvalId } = await t.approveFirstOption();
+    const clicked = await t.service.decideApproval(ALICE, approvalId, "approve");
+    if (!clicked.ok) throw new Error(clicked.code);
+    expect(clicked.reply.message.text).toMatch(/nothing was booked/i);
+    expect(clicked.reply.message.text).not.toMatch(/^Booked/);
+    expect(toolCalls(t, clicked.reply.runId)).toEqual([]);
+    t.testDb.close();
+  });
+
+  it("a yes sent while the approve run is still going is refused with CONVERSATION_BUSY, not queued — one booking", async () => {
+    const t = setup("ok");
+    const blocks = (await t.say(REQUEST)).message.parts.find((p) => p.type === "option_blocks")!
+      .blocks as OptionBlock[];
+    const card = (await t.say(blocks[0]!.slots[0]!.pickText)).message.parts.find(
+      (p) => p.type === "approval_card",
+    ) as { approvalId: string };
+    const runsBefore = (t.testDb.db.prepare(`SELECT COUNT(*) n FROM run`).get() as { n: number }).n;
+
+    const [clicked, typed] = await Promise.all([
+      t.service.decideApproval(ALICE, card.approvalId, "approve"),
+      t.service.sendMessage(ALICE, t.conversationId, "yes", randomUUID()),
+    ]);
+    expect(clicked.ok && clicked.reply.message.text).toMatch(/^Booked:/);
+    expect(typed).toMatchObject({ ok: false, code: "CONVERSATION_BUSY" });
+    expect((t.testDb.db.prepare(`SELECT COUNT(*) n FROM run`).get() as { n: number }).n).toBe(runsBefore + 1); // refused, not queued
+    expect(t.agentBookings()).toHaveLength(1);
     t.testDb.close();
   });
 });

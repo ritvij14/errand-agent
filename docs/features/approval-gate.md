@@ -14,6 +14,7 @@
   - Approve → `approved` + `decided_via`, then at once **Gate 1** uses it up: `approved → used` in the same transaction that creates the operation and moves the workflow to `executing` (see `docs/features/booking-lifecycle.md`).
   - Decline → `declined`, back by intent (R9): a booking returns to `choosing` with the same candidates and facts; selection and hold clear. (Cancel-intent decline → `failed` lands with U28.)
   - A card that is not the waiting one (old id, voided, declined) → `APPROVAL_STALE`, the current card is shown again (R2). Already approved → `APPROVAL_ALREADY_USED`.
+  - **Repeated yes** (§ 2.5.6, U23): a click on a `used` card, or a typed "yes" when no card is waiting (`approvalRepo.lastUsed` — the conversation's newest used approval), reports that approval's operation and calls no tool: "Already booked: … Booking id: X" / "still confirming" / "nothing was booked (reason)". Code `APPROVAL_ALREADY_USED`.
   - Waiting over 10 minutes → voided `expired`, the same slot is re-held, and the reply shows the fresh card with `APPROVAL_STALE`.
   - Anything unclear while a card waits → the card is shown again ("approve or decline").
 - **Voids**: a changed fact while a card waits → `user_correction` (then the change applies and the search re-runs); "never mind" / "cancel that" → `user_dropped` and the workflow is `abandoned`; `expired` as above. `task_switched` lands with U30; booking-changed-elsewhere with U28/U29.

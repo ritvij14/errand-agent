@@ -13,6 +13,7 @@ import { seedMockWorld, type ForcedQueue } from "../tools/index.js";
 export type EvalScenarioStep =
   | { step: "say"; text: string }
   | { step: "advance"; ms: number }
+  /** send this text while the NEXT step's run is still in progress (tests CONVERSATION_BUSY) */
   | { step: "send_concurrently"; text: string }
   /** queue a forced outcome for the next call of a mock tool (NFR-4) */
   | { step: "force"; tool: string; outcome: string }
@@ -75,7 +76,11 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
     })
     .join(" → ");
 
-export const runScenario = async (db: Db, scenario: EvalScenario, userId: string): Promise<ScenarioResult> => {
+export const runScenario = async (
+  db: Db,
+  scenario: EvalScenario,
+  userId: string,
+): Promise<ScenarioResult> => {
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
   seedMockWorld(db, { seed: scenario.seed, clock });
   const queued: { tool: string; outcome: string }[] = [];
@@ -85,16 +90,27 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
       return i === -1 ? undefined : { outcome: queued.splice(i, 1)[0]!.outcome };
     },
   };
-  const service = createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed, forced } });
+  const service = createConversationService({
+    db,
+    clock,
+    model: scriptedModel,
+    mock: { seed: scenario.seed, forced },
+  });
   const conversationId = service.createConversation(userId).id;
   let firstFailure: string | null = null;
   let lastReply: string | null = null;
   let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
   let lastRunId: string | null = null;
+  /** the newest approval card shown — its buttons stay on screen after later replies */
+  let lastCardId: string | null = null;
   let pickedSearchPrice: number | null = null;
 
-  const keep = (result: Awaited<ReturnType<typeof service.decideApproval>>, label: string, busyOk = false): void => {
+  const keep = (
+    result: Awaited<ReturnType<typeof service.decideApproval>>,
+    label: string,
+    busyOk = false,
+  ): void => {
     if (!result.ok) {
       if (busyOk && result.code === "CONVERSATION_BUSY") lastOutcome = result.code;
       else recordFailure(`${label} → ${result.code}: ${result.message}`);
@@ -104,27 +120,51 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
     lastParts = result.reply.message.parts;
     lastOutcome = result.reply.outcome;
     lastRunId = result.reply.runId;
+    const card = result.reply.message.parts.find((p) => p.type === "approval_card") as
+      { approvalId: string } | undefined;
+    if (card) lastCardId = card.approvalId;
   };
-  const send = async (label: string, text: string, busyOk = false): Promise<void> =>
-    keep(await service.sendMessage(userId, conversationId, text, randomUUID()), `${label} "${text}"`, busyOk);
+  /** a `send_concurrently` text waiting to go out while the next step's run is in progress */
+  let concurrent: string | null = null;
+  const act = async (
+    label: string,
+    start: () => Promise<Awaited<ReturnType<typeof service.sendMessage>>>,
+  ): Promise<void> => {
+    const main = start(); // runs up to its first await, so its run already holds the conversation
+    const sideText = concurrent;
+    concurrent = null;
+    const side =
+      sideText === null ? undefined : service.sendMessage(userId, conversationId, sideText, randomUUID());
+    keep(await main, label);
+    if (side) keep(await side, `send_concurrently "${sideText}"`, true);
+  };
+  const send = (label: string, text: string): Promise<void> =>
+    act(`${label} "${text}"`, () => service.sendMessage(userId, conversationId, text, randomUUID()));
   const toolCallsOf = (runId: string | null): string[] =>
-    (runId ? (db.prepare(`SELECT data FROM trace_event WHERE run_id = ? AND type = 'tool_call' ORDER BY seq`).all(runId) as { data: string }[]) : []).map(
-      ({ data }) => {
-        const call = JSON.parse(data) as { tool: string; errorCode: string | null; result?: string };
-        if (call.errorCode) return `${call.tool}:${call.errorCode}`;
-        if (call.tool === "get_booking_status") return `${call.tool}:${(JSON.parse(call.result ?? "{}") as { status?: string }).status}`;
-        return `${call.tool}:ok`;
-      },
-    );
+    (runId
+      ? (db
+          .prepare(`SELECT data FROM trace_event WHERE run_id = ? AND type = 'tool_call' ORDER BY seq`)
+          .all(runId) as { data: string }[])
+      : []
+    ).map(({ data }) => {
+      const call = JSON.parse(data) as { tool: string; errorCode: string | null; result?: string };
+      if (call.errorCode) return `${call.tool}:${call.errorCode}`;
+      if (call.tool === "get_booking_status")
+        return `${call.tool}:${(JSON.parse(call.result ?? "{}") as { status?: string }).status}`;
+      return `${call.tool}:ok`;
+    });
   const partOf = (type: string) => lastParts.find((p) => p.type === type);
 
   for (const step of scenario.steps) {
-    if (step.step === "say" || step.step === "send_concurrently") {
-      await send(step.step, step.text, step.step === "send_concurrently");
+    if (step.step === "say") {
+      await send(step.step, step.text);
+    } else if (step.step === "send_concurrently") {
+      concurrent = step.text;
     } else if (step.step === "force") {
       queued.push({ tool: step.tool, outcome: step.outcome });
     } else if (step.step === "pick") {
-      const blocks = partOf("option_blocks")?.blocks as { provider: { price: number }; slots: { pickText: string }[] }[] | undefined;
+      const blocks = partOf("option_blocks")?.blocks as
+        { provider: { price: number }; slots: { pickText: string }[] }[] | undefined;
       const block = blocks?.[step.block ?? 0];
       const slot = block?.slots[step.slot ?? 0];
       if (!block || !slot) recordFailure("pick → no such option on screen");
@@ -132,55 +172,92 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
         pickedSearchPrice = block.provider.price;
         await send("pick", slot.pickText);
       }
-    } else if (step.step === "advance" as const) {
+    } else if (step.step === ("advance" as const)) {
       clock.advanceMs((step as { ms: number }).ms);
     } else if (step.step === "expect") {
-      if (step.outcome && lastOutcome !== step.outcome) recordFailure(`expect outcome ${step.outcome} → got ${lastOutcome ?? "none"}`);
+      if (step.outcome && lastOutcome !== step.outcome)
+        recordFailure(`expect outcome ${step.outcome} → got ${lastOutcome ?? "none"}`);
       if (step.replyContains && !(lastReply ?? "").includes(step.replyContains)) {
-        recordFailure(`expect reply containing "${step.replyContains}" → got "${(lastReply ?? "").slice(0, 120)}"`);
+        recordFailure(
+          `expect reply containing "${step.replyContains}" → got "${(lastReply ?? "").slice(0, 120)}"`,
+        );
       }
-      if (step.replyNotContains && (lastReply ?? "").toLowerCase().includes(step.replyNotContains.toLowerCase())) {
-        recordFailure(`expect reply NOT containing "${step.replyNotContains}" → got "${(lastReply ?? "").slice(0, 120)}"`);
+      if (
+        step.replyNotContains &&
+        (lastReply ?? "").toLowerCase().includes(step.replyNotContains.toLowerCase())
+      ) {
+        recordFailure(
+          `expect reply NOT containing "${step.replyNotContains}" → got "${(lastReply ?? "").slice(0, 120)}"`,
+        );
       }
       if (step.phase) {
-        const row = db.prepare(`SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`).get(conversationId) as { phase: string } | undefined;
-        if (row?.phase !== step.phase) recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
+        const row = db
+          .prepare(`SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`)
+          .get(conversationId) as { phase: string } | undefined;
+        if (row?.phase !== step.phase)
+          recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
       }
       if (step.facts) {
-        const row = db.prepare(`SELECT facts FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`).get(conversationId) as { facts: string } | undefined;
+        const row = db
+          .prepare(`SELECT facts FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`)
+          .get(conversationId) as { facts: string } | undefined;
         const stored = JSON.parse(row?.facts ?? "{}") as Record<string, { value: unknown }>;
         for (const [key, value] of Object.entries(step.facts)) {
-          if (JSON.stringify(stored[key]?.value) !== JSON.stringify(value)) recordFailure(`expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`);
+          if (JSON.stringify(stored[key]?.value) !== JSON.stringify(value))
+            recordFailure(
+              `expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`,
+            );
         }
       }
       if (step.optionsPriceAtMost !== undefined) {
-        const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as { provider: { price: number } }[] | undefined;
+        const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as
+          { provider: { price: number } }[] | undefined;
         if (!blocks?.length) recordFailure("expect option blocks → none in the reply");
-        else if (blocks.some((b) => b.provider.price > step.optionsPriceAtMost!)) recordFailure(`expect every option ≤ ₹${step.optionsPriceAtMost} → found pricier`);
+        else if (blocks.some((b) => b.provider.price > step.optionsPriceAtMost!))
+          recordFailure(`expect every option ≤ ₹${step.optionsPriceAtMost} → found pricier`);
       }
       if (step.cardMatchesApproval || step.cardPriceDiffersFromSearch) {
-        const card = partOf("approval_card") as { approvalId: string; action: string; provider: { id: string }; slot: string; price: number } | undefined;
+        const card = partOf("approval_card") as
+          | { approvalId: string; action: string; provider: { id: string }; slot: string; price: number }
+          | undefined;
         const record = card
-          ? (db.prepare(`SELECT action, provider_id, slot, price FROM approval WHERE id = ?`).get(card.approvalId) as { action: string; provider_id: string; slot: string; price: number } | undefined)
+          ? (db
+              .prepare(`SELECT action, provider_id, slot, price FROM approval WHERE id = ?`)
+              .get(card.approvalId) as
+              { action: string; provider_id: string; slot: string; price: number } | undefined)
           : undefined;
         if (!card || !record) recordFailure("expect approval card → none (or no approval record behind it)");
-        else if (step.cardMatchesApproval && (card.action !== record.action || card.provider.id !== record.provider_id || card.slot !== record.slot || card.price !== record.price)) {
+        else if (
+          step.cardMatchesApproval &&
+          (card.action !== record.action ||
+            card.provider.id !== record.provider_id ||
+            card.slot !== record.slot ||
+            card.price !== record.price)
+        ) {
           recordFailure("expect card = approval record → they differ");
         } else if (step.cardPriceDiffersFromSearch && card.price === pickedSearchPrice) {
           recordFailure(`expect card price ≠ search price ₹${pickedSearchPrice} → same`);
         }
       }
-      if (step.lastRunToolCalls && JSON.stringify(toolCallsOf(lastRunId)) !== JSON.stringify(step.lastRunToolCalls)) {
-        recordFailure(`expect last run's tool calls ${step.lastRunToolCalls.join(" → ")} → got ${toolCallsOf(lastRunId).join(" → ")}`);
+      if (
+        step.lastRunToolCalls &&
+        JSON.stringify(toolCallsOf(lastRunId)) !== JSON.stringify(step.lastRunToolCalls)
+      ) {
+        recordFailure(
+          `expect last run's tool calls ${step.lastRunToolCalls.join(" → ")} → got ${toolCallsOf(lastRunId).join(" → ")}`,
+        );
       }
       if (step.agentBookings !== undefined) {
-        const { c } = db.prepare(`SELECT COUNT(*) AS c FROM mock_booking WHERE user_id = ? AND id NOT LIKE 'mb-demo%'`).get(userId) as { c: number };
-        if (c !== step.agentBookings) recordFailure(`expect ${step.agentBookings} agent booking(s) → got ${c}`);
+        const { c } = db
+          .prepare(`SELECT COUNT(*) AS c FROM mock_booking WHERE user_id = ? AND id NOT LIKE 'mb-demo%'`)
+          .get(userId) as { c: number };
+        if (c !== step.agentBookings)
+          recordFailure(`expect ${step.agentBookings} agent booking(s) → got ${c}`);
       }
     } else if (step.step === "click") {
-      const card = partOf("approval_card") as { approvalId: string } | undefined;
-      if (!card) recordFailure(`click ${step.decision} → no approval card on screen`);
-      else keep(await service.decideApproval(userId, card.approvalId, step.decision), `click ${step.decision}`);
+      const cardId = lastCardId;
+      if (!cardId) recordFailure(`click ${step.decision} → no approval card on screen`);
+      else await act(`click ${step.decision}`, () => service.decideApproval(userId, cardId, step.decision));
     }
     // invariants over stored state after every step; a violation fails the scenario
     if (!firstFailure) {
@@ -229,7 +306,8 @@ const checkBookingInvariants = (db: Db): string | null => {
        WHERE k.tool = 'book' AND (a.id IS NULL OR a.status <> 'used' OR a.provider_id <> b.provider_id OR a.slot <> b.slot OR a.price <> b.price)`,
     )
     .get() as { id: string } | undefined;
-  if (unapproved) return `I-1: booking ${unapproved.id} has no used approval matching provider, slot and price`;
+  if (unapproved)
+    return `I-1: booking ${unapproved.id} has no used approval matching provider, slot and price`;
   const duplicate = db
     .prepare(
       `SELECT o.id FROM operation o JOIN mock_idempotency k ON k.key LIKE o.id || ':%' AND k.tool = 'book' AND k.booking_id IS NOT NULL
@@ -237,16 +315,29 @@ const checkBookingInvariants = (db: Db): string | null => {
     )
     .get() as { id: string } | undefined;
   if (duplicate) return `I-2: operation ${duplicate.id} created more than one booking`;
-  for (const m of db.prepare(`SELECT run_id FROM message WHERE role = 'agent' AND text LIKE 'Booked:%'`).all() as { run_id: string }[]) {
-    const events = db.prepare(`SELECT type, data FROM trace_event WHERE run_id = ? ORDER BY seq`).all(m.run_id) as { type: string; data: string }[];
-    const verified = events.findIndex((e) => e.type === "tool_call" && e.data.includes('"get_booking_status"') && e.data.includes('\\"status\\":\\"booked\\"'));
+  for (const m of db
+    .prepare(`SELECT run_id FROM message WHERE role = 'agent' AND text LIKE 'Booked:%'`)
+    .all() as { run_id: string }[]) {
+    const events = db
+      .prepare(`SELECT type, data FROM trace_event WHERE run_id = ? ORDER BY seq`)
+      .all(m.run_id) as { type: string; data: string }[];
+    const verified = events.findIndex(
+      (e) =>
+        e.type === "tool_call" &&
+        e.data.includes('"get_booking_status"') &&
+        e.data.includes('\\"status\\":\\"booked\\"'),
+    );
     const succeeded = events.findIndex((e) => e.type === "operation_event" && e.data.includes('"succeeded"'));
-    if (verified === -1 || succeeded < verified) return `I-3: run ${m.run_id} reported a booking without a verified booked status first`;
+    if (verified === -1 || succeeded < verified)
+      return `I-3: run ${m.run_id} reported a booking without a verified booked status first`;
   }
   return null;
 };
 
-export const checkInvariants = (db: Db, caps: { modelCalls: number; toolCalls: number; elapsedMs: number }): string | null => {
+export const checkInvariants = (
+  db: Db,
+  caps: { modelCalls: number; toolCalls: number; elapsedMs: number },
+): string | null => {
   const booking = checkBookingInvariants(db);
   if (booking) return booking;
   for (const run of db.prepare(`SELECT * FROM run`).all() as {
@@ -259,18 +350,29 @@ export const checkInvariants = (db: Db, caps: { modelCalls: number; toolCalls: n
   }[]) {
     if (run.ended_at !== null) {
       if (!run.outcome) return `I-5: run ${run.id} ended without an outcome`;
-      if (run.model_calls > caps.modelCalls) return `I-4: run ${run.id} used ${run.model_calls} model calls (cap ${caps.modelCalls})`;
-      if (run.tool_calls > caps.toolCalls) return `I-4: run ${run.id} used ${run.tool_calls} tool calls (cap ${caps.toolCalls})`;
-      if (run.ended_at - run.started_at > caps.elapsedMs) return `I-4: run ${run.id} took ${run.ended_at - run.started_at} ms (cap ${caps.elapsedMs})`;
-      const agent = db.prepare(`SELECT COUNT(*) c FROM message WHERE run_id = ? AND role = 'agent' AND trim(text) <> ''`).get(run.id) as { c: number };
+      if (run.model_calls > caps.modelCalls)
+        return `I-4: run ${run.id} used ${run.model_calls} model calls (cap ${caps.modelCalls})`;
+      if (run.tool_calls > caps.toolCalls)
+        return `I-4: run ${run.id} used ${run.tool_calls} tool calls (cap ${caps.toolCalls})`;
+      if (run.ended_at - run.started_at > caps.elapsedMs)
+        return `I-4: run ${run.id} took ${run.ended_at - run.started_at} ms (cap ${caps.elapsedMs})`;
+      const agent = db
+        .prepare(`SELECT COUNT(*) c FROM message WHERE run_id = ? AND role = 'agent' AND trim(text) <> ''`)
+        .get(run.id) as { c: number };
       if (agent.c === 0) return `I-5: run ${run.id} ended without an agent reply`;
     }
   }
-  for (const event of db.prepare(`SELECT run_id, seq, data FROM trace_event`).all() as { run_id: string; seq: number; data: string }[]) {
+  for (const event of db.prepare(`SELECT run_id, seq, data FROM trace_event`).all() as {
+    run_id: string;
+    seq: number;
+    data: string;
+  }[]) {
     for (const user of DEMO_USERS) {
-      if (event.data.includes(user.password)) return `I-9: trace event ${event.run_id}#${event.seq} contains a password`;
+      if (event.data.includes(user.password))
+        return `I-9: trace event ${event.run_id}#${event.seq} contains a password`;
     }
-    if (/session=|cookie/i.test(event.data)) return `I-9: trace event ${event.run_id}#${event.seq} contains a cookie`;
+    if (/session=|cookie/i.test(event.data))
+      return `I-9: trace event ${event.run_id}#${event.seq} contains a cookie`;
   }
   return null;
 };

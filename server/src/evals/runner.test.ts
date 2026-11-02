@@ -14,6 +14,27 @@ function evalWorld() {
 }
 
 describe("the eval runner", () => {
+  it("every scenario that approves a booking queues its book outcome, so it never depends on a random key (NFR-4)", () => {
+    // operation ids (and so idempotency keys) are random UUIDs; an unforced `book` draws a different outcome each run
+    const unforced = Object.values(SCENARIOS).filter((s) => {
+      let queuedBooks = 0;
+      let cardFromPick = false; // only the first approve of a picked slot's card reaches `book`
+      return s.steps.some((step) => {
+        if (step.step === "force" && step.tool === "book") queuedBooks += 1;
+        if (step.step === "pick") cardFromPick = true;
+        const approves =
+          (step.step === "click" && step.decision === "approve") ||
+          (step.step === "say" && step.text === "yes");
+        if (!approves || !cardFromPick) return false;
+        cardFromPick = false;
+        if (queuedBooks === 0) return true;
+        queuedBooks -= 1;
+        return false;
+      });
+    });
+    expect(unforced.map((s) => s.id)).toEqual([]);
+  });
+
   it("passes scenario E0 (scripted hello → help reply), with invariants checked", async () => {
     const w = evalWorld();
     const result = await runScenario(w.testDb.db, SCENARIOS["E0"]!, w.user);
