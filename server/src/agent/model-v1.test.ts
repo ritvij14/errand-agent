@@ -80,6 +80,32 @@ describe("corrections (R9)", () => {
     }
   });
 
+  it('memory reads (MH-6): "I live in HSR" states an area, "forget my area" forgets, "what do you remember" views; a one-off area never states', async () => {
+    expect(await read("I live in HSR")).toMatchObject({
+      kind: "memory_save",
+      key: "area",
+      value: "hsr_layout",
+    });
+    expect(await read("my area is Koramangala now")).toMatchObject({
+      kind: "memory_save",
+      key: "area",
+      value: "koramangala",
+    });
+    expect(await read("never before 10am")).toMatchObject({
+      kind: "memory_save",
+      key: "earliest_time",
+      value: "10:00",
+    });
+    expect(await read("forget my area")).toMatchObject({ kind: "memory_forget", key: "area" });
+    expect(await read("what do you remember about me?")).toMatchObject({ kind: "memory_view" });
+    // a one-off area is a booking request, never a memory save
+    expect(await read("plumber in HSR")).toMatchObject({
+      kind: "workflow",
+      intent: "book",
+      area: "hsr_layout",
+    });
+  });
+
   it('"cancel that" / "never mind" / "stop" / "forget it" are drops; "cancel my AC servicing" is the cancel action (FR-16, V-10)', async () => {
     expect(await read("cancel that")).toMatchObject({ kind: "drop" });
     expect(await read("never mind")).toMatchObject({ kind: "drop" });

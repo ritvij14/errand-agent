@@ -360,7 +360,7 @@ export const runScenario = async (
 };
 
 // Invariants over stored state (§ 2.5.10). More switch on as their units land.
-const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-8", "I-9", "I-10"] as const;
+const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-6", "I-8", "I-9", "I-10"] as const;
 
 /**
  * I-1, I-2, I-3 — bookings. Agent-created bookings are the ones with a provider-side
@@ -467,6 +467,21 @@ export const checkInvariants = (
     }
     return false;
   };
+  // I-6 — a forgotten memory fact is never used: no workflow may still draw a detail
+  // from a memory fact marked forgotten.
+  for (const w of db.prepare(`SELECT id, facts FROM workflow`).all() as {
+    id: string;
+    facts: string | null;
+  }[]) {
+    if (!w.facts) continue;
+    const facts = JSON.parse(w.facts) as Record<string, { source?: string; memoryFactId?: string }>;
+    for (const fact of Object.values(facts)) {
+      if (fact.source !== "memory" || !fact.memoryFactId) continue;
+      const row = db.prepare(`SELECT status FROM memory_fact WHERE id = ?`).get(fact.memoryFactId) as
+        { status: string } | undefined;
+      if (row?.status === "forgotten") return `I-6: workflow ${w.id} still uses a forgotten memory fact`;
+    }
+  }
   for (const row of db
     .prepare(
       `SELECT workflow_id, action, provider_id, slot, price, hold_id, booking_id FROM approval WHERE status = 'pending'`,

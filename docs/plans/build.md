@@ -407,7 +407,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U32 Stated memory: save, use, view, correct, forget
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `memory/memory.test.ts` (stated save; same-key correction in place; view lists own facts per user; forget keeps the row as a marker and blocks that value; re-stating reactivates), `agent/memory.flow.test.ts` (a one-off area never saved; "I live in HSR" saved; a new conversation fills the area `source: memory` + `memoryFactId` with the note; forget marks the record and the open workflow drops it at its next run (R6); a user-given area survives a forget; a lasting correction updates memory and the workflow), `model-v1.test.ts` memory reads, runner I-6 on. Evals 16, 19. Suite 275/275, evals 28/28. QA `/tmp/verify-U32/drive.txt`: two conversations of alice — saved, used with the note across conversation, forgotten, and the next run asks for the area again.
 - **Depends on.** U18.
 - **Covers.** MH-6, FR-12 (chat), § 2.5.8, V-11, R6.
 - **Build.** `server/src/memory`. Stated facts only from explicit lasting statements. Active facts fill workflow facts with the memory fact id and a one-line note. A differing request applies to this request only, with a light note. Chat view, correct and forget. At run start, forgotten or corrected memory updates the workflow facts it supplied (R6).

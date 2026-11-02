@@ -21,6 +21,7 @@ import {
   type OperationRecord,
 } from "../booking/index.js";
 import { findService } from "./model.js";
+import * as memoryApi from "../memory/index.js";
 import {
   APPROVAL_MAX_AGE_MS,
   approvalCardPart,
@@ -345,18 +346,30 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     approvalId?: string,
   ): Promise<ApplyOutcome> => {
     const active = getActive(conversationId);
+    // R6: memory-sourced facts are re-checked at every run start — a fact the user forgot
+    // or corrected (chat or panel) learns the open workflow here, before anything reads it.
+    // During `executing` / `verifying` nothing changes (2.5.2 rule 4).
+    const memoryNote =
+      active?.phase !== "executing" && active?.phase !== "verifying" && active
+        ? syncMemoryFacts(active, userId)
+        : undefined;
+    const syncNote = memoryNote?.note ?? "";
+    const synced = memoryNote?.workflow ?? active;
     const shown =
-      active?.phase === "choosing" ? ((active.candidates as OptionBlock[] | null) ?? undefined) : undefined;
-    const readJob = { text, waitingFor: active?.phase ?? "nothing", clock, options: shown };
+      synced?.phase === "choosing" ? ((synced.candidates as OptionBlock[] | null) ?? undefined) : undefined;
+    const readJob = { text, waitingFor: synced?.phase ?? "nothing", clock, options: shown };
     let read: ReadResult = await (runModel ?? model).read(readJob);
     // an unusable read is read again; the model-call cap stops a model that never gives one
     while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
 
-    if (read.kind === "provider_details") return providerDetails(active, read.providerId);
-    if (read.kind === "list_bookings") return listMyBookings(active);
-    if (read.kind === "cancel") return startChange("cancel", userId, conversationId, active, text);
+    if (read.kind === "memory_view") return memoryView(synced, userId);
+    if (read.kind === "memory_forget") return memoryForget(synced, userId, read.key, syncNote);
+    if (read.kind === "memory_save") return memorySave(synced, userId, conversationId, read, syncNote);
+    if (read.kind === "provider_details") return providerDetails(synced, read.providerId);
+    if (read.kind === "list_bookings") return listMyBookings(synced);
+    if (read.kind === "cancel") return startChange("cancel", userId, conversationId, synced, text);
     if (read.kind === "reschedule")
-      return startChange("reschedule", userId, conversationId, active, text, read.timeWindow);
+      return startChange("reschedule", userId, conversationId, synced, text, read.timeWindow);
     if (active?.pending_question && read.kind === "decision") {
       const pending = JSON.parse(active.pending_question) as { type?: string; text?: string };
       if (pending.type === "task_switch" && !approvals.getOpen(active.id)) {
@@ -508,6 +521,35 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
     if (values.preferences) facts.preferences = fact("preferences", values.preferences);
 
+    // MH-6: a workflow starts only from what the user said — active memory fills what is
+    // still missing, with the note saying so ("say if that's changed"). Never fills a
+    // detail the user gave (V-11).
+    const memoryNotes: string[] = [];
+    if (!facts.area) {
+      const saved = memoryApi.state(db, userId, "area");
+      if (saved) {
+        facts.area = memoryFactOf("area", saved) as Fact & { value: string };
+        memoryNotes.push(
+          `Using your saved area: ${AREA_NAMES[saved.value] ?? saved.value} (say if that's changed).`,
+        );
+        trace?.record("memory_event", { event: "used", key: "area", value: saved.value });
+      }
+    }
+    if (!facts.time_window) {
+      const savedTime = memoryApi.state(db, userId, "earliest_time");
+      if (savedTime) {
+        const window = {
+          dateFrom: null,
+          dateTo: null,
+          earliest: savedTime.value,
+          latest: null,
+        } as TimeWindow;
+        facts.time_window = memoryFactOf("earliest_time", savedTime, window) as Fact & { value: TimeWindow };
+        memoryNotes.push(`Using your saved time: not before ${savedTime.value} (say if that's changed).`);
+        trace?.record("memory_event", { event: "used", key: "earliest_time", value: savedTime.value });
+      }
+    }
+
     const saved = saveWorkflow(conversationId, -1, (w) => ({
       ...w,
       user_id: userId,
@@ -531,14 +573,23 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       toPhase: saved.workflow.phase,
       reason: "workflow started",
     });
-    return flags.timeOutOfRange
-      ? {
-          phase: saved.workflow.phase,
-          reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.",
-          facts: saved.workflow.facts,
-          code: TIME_OUT_OF_RANGE,
-        }
-      : advance(saved.workflow);
+    if (flags.timeOutOfRange)
+      return {
+        phase: saved.workflow.phase,
+        reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.",
+        facts: saved.workflow.facts,
+        code: TIME_OUT_OF_RANGE,
+      };
+    // V-11: the request's area wins over the saved one — memory keeps it, one light note.
+    const savedArea = memoryApi.state(db, userId, "area");
+    const userArea = facts.area ? (facts.area.value as string) : undefined;
+    const differs =
+      userArea && savedArea && userArea !== savedArea.value
+        ? ` I'll book that in ${AREA_NAMES[userArea] ?? userArea} this time — your saved area stays ${AREA_NAMES[savedArea.value] ?? savedArea.value} (“update my area” if you've moved).`
+        : "";
+    const outcome = await advance(saved.workflow);
+    const prefix = `${memoryNotes.join(" ")}${differs}`.trim();
+    return prefix ? { ...outcome, reply: `${prefix} ${outcome.reply}`.trim() } : outcome;
   };
 
   return {
@@ -743,7 +794,19 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         });
       }
     }
-    return advance(savedWorkflow);
+    const outcome = advance(savedWorkflow);
+    // V-11: a request detail that differs from a saved preference applies to this request
+    // only — one light note, memory unchanged, no waiting for an answer.
+    const memoryArea = memoryApi.state(db, savedWorkflow.user_id, "area");
+    const newArea =
+      savedWorkflow.facts.area?.source === "user"
+        ? (savedWorkflow.facts.area?.value as string | undefined)
+        : undefined;
+    const differing = newArea && memoryArea && newArea !== memoryArea.value;
+    const differingNote = differing
+      ? ` I'll book that in ${AREA_NAMES[newArea!]} this time — your saved area stays ${AREA_NAMES[memoryArea!.value] ?? memoryArea!.value} (“update my area” if you've moved).`
+      : "";
+    return differingNote ? { ...outcome, reply: `${outcome.reply}${differingNote}` } : outcome;
   }
 
   function voidOpenApproval(w: WorkflowRow, reason: string): void {
@@ -1141,6 +1204,152 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * A request already in progress is never dropped silently — the user drops it first
    * (asking comes with U30).
    */
+  /**
+   * R6: sync the open workflow's memory-sourced facts against the memory store.
+   * Forgotten → the fact is dropped (and asked again if still required, 2.5.8);
+   * corrected → the fact takes the new value, built-on state clears (rule 2).
+   * Returns note + updated workflow when something changed.
+   */
+  function syncMemoryFacts(
+    current: WorkflowRow,
+    userId: string,
+  ): { note: string; workflow?: WorkflowRow } | undefined {
+    const facts = { ...current.facts } as Facts;
+    const notes: string[] = [];
+    let changed = false;
+    for (const key of ["area", "time_window"] as (keyof Facts)[]) {
+      const fact = facts[key] as Fact | undefined;
+      if (!fact || fact.source !== "memory" || !fact.memoryFactId) continue;
+      const record =
+        key === "area" ? memoryApi.state(db, userId, "area") : memoryApi.state(db, userId, "earliest_time");
+      const stored = db
+        .prepare(`SELECT status, value FROM memory_fact WHERE id = ?`)
+        .get(fact.memoryFactId) as { status: string; value: string } | undefined;
+      if (!stored) continue;
+      if (stored.status === "forgotten" || !record) {
+        delete facts[key];
+        changed = true;
+        trace?.record("memory_event", { event: "blocked-by-forget", key, value: null });
+        notes.push("Your saved area is gone — I'll ask for it again.");
+        continue;
+      }
+      // corrected: for the time fact compare only the remembered bound
+      const differ =
+        key === "area"
+          ? fact.value !== record.value
+          : ((fact.value as TimeWindow).earliest ?? null) !== record.value;
+      if (!differ) continue;
+      if (key === "area") facts.area = memoryFactOf(key, record);
+      else {
+        const tw = { ...(fact.value as TimeWindow), earliest: record.value } as TimeWindow;
+        facts.time_window = memoryFactOf(key, record, tw) as Fact & { value: TimeWindow };
+      }
+      changed = true;
+      trace?.record("memory_event", { event: "used", key, value: record.value });
+      notes.push(`Your saved ${key === "area" ? "area" : "time"} changed — using it.`);
+    }
+    if (!changed) return undefined;
+    const saved = saveWorkflow(current.conversation_id, current.version, (w) => ({
+      ...w,
+      facts,
+      phase: phaseAfterChange(current, true, facts),
+      ...(changed ? { candidates: null, selection: null, hold: null } : {}),
+    }));
+    void saved;
+    const fresh = getActive(current.conversation_id);
+    return { note: notes.join(" "), workflow: fresh ?? undefined };
+  }
+
+  /** A fact built from a memory record: source stays honest, the record id travels (R6). */
+  function memoryFactOf(_key: string, record: { id: string; value: string }, value?: unknown): Fact {
+    return {
+      value: value ?? record.value,
+      source: "memory",
+      updatedAt: nowMs(),
+      memoryFactId: record.id,
+    } as Fact;
+  }
+
+  function memoryView(current: WorkflowRow | undefined, userId: string): ApplyOutcome {
+    const factsList = memoryApi.view(db, userId);
+    const lines = factsList.map((f) => {
+      const what =
+        f.key === "area"
+          ? `area — ${AREA_NAMES[f.value] ?? f.value}`
+          : f.key === "earliest_time"
+            ? `time — not before ${f.value}`
+            : `preferred ${f.service ?? "provider"}`;
+      return `${what} (${f.source === "stated" ? "you told me" : "I worked out — say yes to keep it"})`;
+    });
+    return {
+      phase: current?.phase ?? "collecting",
+      reply: lines.length
+        ? `Here's what I remember: ${lines.join("; ")}.`
+        : "I don't have anything saved for you yet.",
+      facts: current?.facts ?? ({} as Facts),
+    };
+  }
+
+  function memoryForget(
+    current: WorkflowRow | undefined,
+    userId: string,
+    key: string,
+    syncNote: string,
+  ): ApplyOutcome {
+    void current;
+    const result = memoryApi.forget(db, clock, userId, key, undefined, (record) =>
+      trace?.record("memory_event", { event: "forgotten", key: record.key, value: record.value }),
+    );
+    if (!result.ok)
+      return {
+        phase: current?.phase ?? "collecting",
+        reply: `${syncNote}There's nothing saved ${key === "area" ? "for your area" : `as ${key}`} to forget.`,
+        facts: current?.facts ?? ({} as Facts),
+      };
+    return {
+      phase: current?.phase ?? "collecting",
+      reply: `${syncNote}Forgotten. I'll ask for it again next time we book.`,
+      facts: current?.facts ?? ({} as Facts),
+    };
+  }
+
+  function memorySave(
+    current: WorkflowRow | undefined,
+    userId: string,
+    conversationId: string,
+    read: Extract<ReadResult, { kind: "memory_save" }>,
+    syncNote: string,
+  ): ApplyOutcome {
+    if (!read.value)
+      return {
+        phase: current?.phase ?? "collecting",
+        reply: `${syncNote}Which ${read.key === "area" ? "area" : "time"} should I remember? Tell me the ${read.key === "area" ? "area" : "time"} in the same sentence.`,
+        facts: current?.facts ?? ({} as Facts),
+      };
+    const record = memoryApi.saveStated(db, clock, userId, read.key, read.value, undefined, (event, r) =>
+      trace?.record("memory_event", { event, key: r.key, value: r.value }),
+    );
+    const savedNote = `Saved: your saved ${read.key === "area" ? "area" : "earliest time"} is ${read.key === "area" ? (AREA_NAMES[read.value] ?? read.value) : `not before ${read.value}`}.`;
+    // a lasting correction also corrects the open workflow's detail (2.5.8)
+    if (current && current.intent) {
+      const value =
+        read.key === "area"
+          ? { kind: "workflow", area: read.value }
+          : {
+              kind: "workflow",
+              timeWindow: { dateFrom: null, dateTo: null, earliest: read.value, latest: null },
+            };
+      const applied = applyToWorkflow(conversationId, current, value as ReadResult);
+      return { ...applied, reply: `${syncNote}${savedNote} ${applied.reply}`.trim() };
+    }
+    return {
+      phase: current?.phase ?? "collecting",
+      reply: `${syncNote}${savedNote}`,
+      facts: current?.facts ?? ({} as Facts),
+      code: record ? undefined : "unknown_error",
+    };
+  }
+
   /**
    * FR-6 (U31): answer a details question without touching the workflow — the reply is
    * built from structured fields only (2.5.7 rule 2) and reviews ride as a labelled part

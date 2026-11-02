@@ -478,6 +478,53 @@ export const SCENARIOS: Record<string, EvalScenario> = {
     ],
   },
   // ——— reschedule (FR-3, V-3, V-9, U29) ———
+  // ——— memory (MH-6, U32) ———
+  "16": {
+    id: "16",
+    name: "Memory: state area → used with a note → corrected → forgotten → never used again",
+    description:
+      "MH-6: a lasting statement is saved; a new conversation fills the detail with a one-line note; a correction updates it; after forget the fact is never used or filled again.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "I live in HSR Layout" },
+      { step: "expect", replyContains: "Saved: your saved area is HSR Layout" },
+      { step: "conversation", name: "second" },
+      { step: "say", text: "book a plumber" },
+      {
+        step: "expect",
+        phase: "collecting",
+        replyContains: "saved area: HSR Layout",
+        facts: { area: "hsr_layout" },
+      },
+      { step: "say", text: "my area is Koramangala now" },
+      {
+        step: "expect",
+        phase: "collecting",
+        replyContains: "Saved: your saved area is Koramangala",
+        facts: { area: "koramangala" },
+      },
+      { step: "say", text: "forget my area" },
+      { step: "expect", replyContains: "Forgotten" },
+      { step: "conversation", name: "third" },
+      { step: "say", text: "book an electrician" },
+      { step: "expect", replyNotContains: "saved area", facts: { service: "electrician" } },
+    ],
+  },
+  "19": {
+    id: "19",
+    name: "Booking for a different area than saved → used for this request only, memory unchanged",
+    description:
+      "V-11: the request's area wins, one light note says the saved area stays, and no memory write happens without an explicit update.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "I live in HSR Layout" },
+      { step: "conversation", name: "second" },
+      { step: "say", text: "plumber in Jayanagar, any time" },
+      { step: "expect", replyContains: "saved area stays HSR Layout", facts: { area: "jayanagar" } },
+      { step: "say", text: "what do you remember about me?" },
+      { step: "expect", replyContains: "HSR Layout" },
+    ],
+  },
   "12": {
     id: "12",
     name: "Reschedule: slot conflict → back to the same provider's options → rescheduled at the same price",

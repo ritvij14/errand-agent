@@ -40,10 +40,47 @@ export type ReadResult =
   | { kind: "reschedule"; timeWindow?: TimeWindow }
   /** FR-6: "tell me about provider 2" / a "Details" link — the id comes from the shown options */
   | { kind: "provider_details"; providerId?: string }
+  /** MH-6: a lasting statement → a memory fact (“I live in HSR”, “never before 10”) */
+  | { kind: "memory_save"; key: "area" | "earliest_time"; value?: string }
+  | { kind: "memory_forget"; key: string }
+  /** FR-12 chat: “what do you remember about me?” */
+  | { kind: "memory_view" }
   /** the model's read can't be used (only an eval can force this with the scripted model); read again */
   | { kind: "unusable" };
 
 const VAGUE_PICK_RE = /\b(first|second|third|fourth|fifth|last|that|this|other) one\b/i;
+
+// MH-6 (U32): lasting statements only. One-off details never match these.
+const MEMORY_VIEW_RE = /what do you remember|what'?'s remembered|my preferences[?]*$/i;
+const MEMORY_FORGET_RE = /\bforget (?:my |the )?(area|saved area|time|provider)\b/i;
+const MEMORY_FORGET_KEYS: Record<string, string> = {
+  area: "area",
+  "saved area": "area",
+  time: "earliest_time",
+  provider: "preferred_provider",
+};
+const MEMORY_AREA_SAVE_RE = /\b(?:i live in|remember (?:that )?i live in|my area is|always in)\b/i;
+const MEMORY_TIME_SAVE_RE = /\b(?:never|not)\s+before\b/i;
+
+/** A lasting statement → a memory fact to save. Undefined for one-off details. */
+const readMemorySave = (text: string, clock: Clock): ReadResult | undefined => {
+  if (MEMORY_AREA_SAVE_RE.test(text)) {
+    for (const [phrase, canonical] of Object.entries(AREA_SYNONYMS)) {
+      if (new RegExp(`\\b${phrase.replace(/[-]/g, "\\-")}\\b`, "i").test(text))
+        return { kind: "memory_save", key: "area", value: canonical };
+    }
+    return { kind: "memory_save", key: "area" }; // no area named — the code asks for it
+  }
+  if (MEMORY_TIME_SAVE_RE.test(text)) {
+    const parsed = parseTimeWindow(text, clock);
+    return {
+      kind: "memory_save",
+      key: "earliest_time",
+      ...(parsed.ok && parsed.data.earliest ? { value: parsed.data.earliest } : {}),
+    };
+  }
+  return undefined;
+};
 
 /**
  * A pick names a shown provider (FR-9, ADR-007); the time narrows its slots to one.
@@ -162,6 +199,14 @@ export const readUserMessage = async (
   if (DROP_RE.test(text)) return { kind: "drop" };
   if (PLAIN_YES.test(text)) return { kind: "decision", decision: "yes" };
   if (PLAIN_NO.test(text)) return { kind: "decision", decision: "no" };
+  // MH-6: only explicit, lasting statements become memory; a one-off detail falls through
+  // to the normal read and is never saved.
+  if (MEMORY_VIEW_RE.test(text)) return { kind: "memory_view" };
+  const memoryKey = MEMORY_FORGET_RE.exec(text);
+  if (memoryKey)
+    return { kind: "memory_forget", key: MEMORY_FORGET_KEYS[memoryKey[1]!.toLowerCase()] ?? "all" };
+  const save = readMemorySave(text, clock);
+  if (save) return save;
   const lead = DECISION_LEAD.exec(text);
   if (lead) return readDecisionWithChange(text.slice(lead[0].length), clock);
   if (DETAILS_RE.test(text)) {
