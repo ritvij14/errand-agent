@@ -320,4 +320,5 @@ Numbered SQL files in `server/migrations/`, applied in order on start; applied v
 | 004_conversations | 2026-11-02 | `conversation`, `run`, `message` (+client_message_id unique, R2) |
 | 005_workflow   | 2026-11-02 | `workflow` (facts JSON, candidates, pending_question, version; one active per conversation) |
 | 006_approval   | 2026-11-02 | `workflow` + `selection`, `hold` (JSON); `approval` table + `one_open_approval` index |
-| _later_        | —    | operation / memory migrations follow their units |
+| 007_operation  | 2026-11-02 | `operation` (unique approval_id + idempotency_key; in-flight index; one in-flight op per booking) |
+| _later_        | —    | memory migrations follow their unit |

@@ -32,6 +32,8 @@ export type EvalScenarioStep =
       cardMatchesApproval?: boolean;
       /** the card's price differs from the picked option's search price (V-2) */
       cardPriceDiffersFromSearch?: boolean;
+      /** provider-side bookings this user's runs created (seeded history excluded) */
+      agentBookings?: number;
     }
   | { step: "click"; decision: "approve" | "decline" };
 
@@ -63,6 +65,7 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
       if (s.step === "advance") return `advance ${s.ms} ms`;
       if (s.step === "force") return `force ${s.tool}=${s.outcome}`;
       if (s.step === "pick") return `pick block ${s.block ?? 0} slot ${s.slot ?? 0}`;
+      if (s.step === "click") return `click ${s.decision}`;
       if (s.step === "expect") {
         return `expect ${JSON.stringify({ ...s, step: undefined })}`;
       }
@@ -95,6 +98,12 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
       else recordFailure(`${label} "${text}" → ${result.code}: ${result.message}`);
       return;
     }
+    lastReply = result.reply.message.text;
+    lastParts = result.reply.message.parts;
+    lastOutcome = result.reply.outcome;
+  };
+  const keep = (result: Awaited<ReturnType<typeof service.decideApproval>>, label: string): void => {
+    if (!result.ok) return recordFailure(`${label} → ${result.code}: ${result.message}`);
     lastReply = result.reply.message.text;
     lastParts = result.reply.message.parts;
     lastOutcome = result.reply.outcome;
@@ -153,8 +162,14 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
           recordFailure(`expect card price ≠ search price ₹${pickedSearchPrice} → same`);
         }
       }
+      if (step.agentBookings !== undefined) {
+        const { c } = db.prepare(`SELECT COUNT(*) AS c FROM mock_booking WHERE user_id = ? AND id NOT LIKE 'mb-demo%'`).get(userId) as { c: number };
+        if (c !== step.agentBookings) recordFailure(`expect ${step.agentBookings} agent booking(s) → got ${c}`);
+      }
     } else if (step.step === "click") {
-      recordFailure("click: approval cards don't exist in the skeleton (U19+)");
+      const card = partOf("approval_card") as { approvalId: string } | undefined;
+      if (!card) recordFailure(`click ${step.decision} → no approval card on screen`);
+      else keep(await service.decideApproval(userId, card.approvalId, step.decision), `click ${step.decision}`);
     }
     // invariants over stored state after every step; a violation fails the scenario
     if (!firstFailure) {
@@ -169,8 +184,8 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
     expected: describeSteps(scenario.steps),
     actual: firstFailure ? "FAILED" : `lastOutcome=${lastOutcome ?? "none"}`,
     pass: !firstFailure,
-    notes: firstFailure ?? "invariants I-4, I-5, I-9 checked after every step",
-    checkedInvariants: ["I-4", "I-5", "I-9"],
+    notes: firstFailure ?? `invariants ${CHECKED_INVARIANTS.join(", ")} checked after every step`,
+    checkedInvariants: [...CHECKED_INVARIANTS],
     firstFailure,
   };
 
@@ -179,8 +194,50 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
   }
 };
 
-// Invariants over stored state (§ 2.5.10), starting with I-4, I-5, I-9.
+// Invariants over stored state (§ 2.5.10). More switch on as their units land.
+const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-9"] as const;
+
+/**
+ * I-1, I-2, I-3 — bookings. Agent-created bookings are the ones with a provider-side
+ * idempotency record (R10: seeded history and "someone else took the slot" bookings
+ * carry no approval by design). A success reply always starts with "Booked:".
+ */
+const checkBookingInvariants = (db: Db): string | null => {
+  const stray = db
+    .prepare(
+      `SELECT b.id FROM mock_booking b WHERE b.id NOT LIKE 'mb-demo%' AND b.user_id <> 'u-someone-else'
+       AND NOT EXISTS (SELECT 1 FROM mock_idempotency k WHERE k.booking_id = b.id AND k.tool = 'book')`,
+    )
+    .get() as { id: string } | undefined;
+  if (stray) return `I-1: booking ${stray.id} was made outside any operation`;
+  const unapproved = db
+    .prepare(
+      `SELECT b.id FROM mock_idempotency k JOIN mock_booking b ON b.id = k.booking_id
+       LEFT JOIN operation o ON o.idempotency_key = k.key
+       LEFT JOIN approval a ON a.id = o.approval_id
+       WHERE k.tool = 'book' AND (a.id IS NULL OR a.status <> 'used' OR a.provider_id <> b.provider_id OR a.slot <> b.slot OR a.price <> b.price)`,
+    )
+    .get() as { id: string } | undefined;
+  if (unapproved) return `I-1: booking ${unapproved.id} has no used approval matching provider, slot and price`;
+  const duplicate = db
+    .prepare(
+      `SELECT o.id FROM operation o JOIN mock_idempotency k ON k.key LIKE o.id || ':%' AND k.tool = 'book' AND k.booking_id IS NOT NULL
+       GROUP BY o.id HAVING COUNT(DISTINCT k.booking_id) > 1`,
+    )
+    .get() as { id: string } | undefined;
+  if (duplicate) return `I-2: operation ${duplicate.id} created more than one booking`;
+  for (const m of db.prepare(`SELECT run_id FROM message WHERE role = 'agent' AND text LIKE 'Booked:%'`).all() as { run_id: string }[]) {
+    const events = db.prepare(`SELECT type, data FROM trace_event WHERE run_id = ? ORDER BY seq`).all(m.run_id) as { type: string; data: string }[];
+    const verified = events.findIndex((e) => e.type === "tool_call" && e.data.includes('"get_booking_status"') && e.data.includes('\\"status\\":\\"booked\\"'));
+    const succeeded = events.findIndex((e) => e.type === "operation_event" && e.data.includes('"succeeded"'));
+    if (verified === -1 || succeeded < verified) return `I-3: run ${m.run_id} reported a booking without a verified booked status first`;
+  }
+  return null;
+};
+
 export const checkInvariants = (db: Db, caps: { modelCalls: number; toolCalls: number; elapsedMs: number }): string | null => {
+  const booking = checkBookingInvariants(db);
+  if (booking) return booking;
   for (const run of db.prepare(`SELECT * FROM run`).all() as {
     id: string;
     outcome: string | null;

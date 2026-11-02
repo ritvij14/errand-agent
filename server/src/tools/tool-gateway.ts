@@ -2,14 +2,15 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, type Trace } from "../tracing/index.js";
 import type { ForcedQueue, WriteOpts } from "./write-tools.js";
-import { getBookingStatus, holdSlot } from "./write-tools.js";
+import { book, getBookingStatus, holdSlot } from "./write-tools.js";
 import { getProvider, listBookings, searchProviders, type BookingRecord, type ProviderSummary, type ToolResult } from "./read-tools.js";
 
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
 
 // The tool gateway (§ 2.5.4): the agent's ONLY way to the provider API. Bound to one
-// signed-in user and one run (trace + tool budget). Write tools are fail-closed here
-// until U21 adds the persisted-operation execution path (R1, MH-2).
+// signed-in user and one run (trace + tool budget). Write tools are fail-closed: they
+// run only when `authorizeWrite` (Gate 2, owned by booking operations) says the call
+// matches a persisted in-flight operation (R1, MH-2). No authorizer → every write refused.
 
 export const TOOL_CALL_CAP = 10;
 
@@ -42,6 +43,8 @@ export type CreateGatewayOpts = {
   userId: string;
   trace?: Trace;
   toolsUsed?: number;
+  /** Gate 2 (§ 2.5.5): may this exact write call run? */
+  authorizeWrite?: (tool: string, args: Record<string, unknown>) => boolean;
   broken?: { listBookings?: (db: Db, opts: WriteOpts, userId: string) => ToolResult<{ bookings: BookingRecord[] }> };
 };
 
@@ -124,9 +127,14 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
       budgeted("hold_slot", { ...args }, () => holdSlot(db, toolOpts, userId, args), (d) => typeof d?.holdId === "string" && typeof d?.quotedPrice === "number"),
     getBookingStatus: (idempotencyKey: string): ToolResult<{ status: string; bookingId?: string }> =>
       budgeted("get_booking_status", { idempotencyKey }, () => getBookingStatus(db, toolOpts, idempotencyKey), (d) => typeof d?.status === "string"),
-    // ——— fail-closed writes (MH-2): executable only through booking operations (U21, R1) ———
-    book: (args: { holdId: string; idempotencyKey: string }): ToolResult<never> =>
-      budgeted("book", { ...args }, () => refuse(), () => false),
+    // ——— fail-closed writes (MH-2): executable only through booking operations (R1) ———
+    book: (args: { holdId: string; idempotencyKey: string }): ToolResult<{ bookingId: string }> =>
+      budgeted(
+        "book",
+        { ...args },
+        () => (opts.authorizeWrite?.("book", { ...args }) ? book(db, toolOpts, userId, args) : refuse()),
+        (d) => typeof d?.bookingId === "string",
+      ),
     cancel: (args: { bookingId: string; idempotencyKey: string }): ToolResult<never> =>
       budgeted("cancel", { ...args }, () => refuse(), () => false),
     reschedule: (args: { bookingId: string; newSlot: string; idempotencyKey: string }): ToolResult<never> =>

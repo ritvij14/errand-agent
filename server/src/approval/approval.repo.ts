@@ -73,6 +73,10 @@ export const approvalRepo = (db: Db) => ({
     db
       .prepare(`UPDATE approval SET status = 'voided', void_reason = ?, decided_at = ? WHERE id = ? AND status IN ('pending','approved')`)
       .run(reason, now, id).changes === 1,
+
+  /** approved → used (§ 2.5.5 life step 5): single use; false if it wasn't approved. */
+  markUsed: (id: string, now: number): boolean =>
+    db.prepare(`UPDATE approval SET status = 'used', used_at = ? WHERE id = ? AND status = 'approved'`).run(now, id).changes === 1,
 });
 
 /** A pending approval older than the hold's lifetime is stale (§ 2.5.5 life step 6). */

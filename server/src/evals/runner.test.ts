@@ -3,7 +3,7 @@ import { createClock } from "../shared/clock.js";
 import { createTestDb } from "../shared/test-db.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { seedDemoUsers } from "../auth/index.js";
-import { runScenario } from "./runner.js";
+import { checkInvariants, runScenario } from "./runner.js";
 import { SCENARIOS } from "./scenarios.js";
 
 function evalWorld() {
@@ -50,6 +50,29 @@ describe("the eval runner", () => {
     const result = await runScenario(w.testDb.db, broken, w.user);
     expect(result.pass).toBe(false);
     expect(result.firstFailure).toMatch(/expect/);
+    w.testDb.close();
+  });
+});
+describe("booking invariants catch what they claim to (§ 2.5.10)", () => {
+  it("I-1: a provider-side booking made outside any operation is reported", async () => {
+    const w = evalWorld();
+    await runScenario(w.testDb.db, SCENARIOS["E0"]!, w.user); // seeds the mock world
+    w.testDb.db
+      .prepare(
+        `INSERT INTO mock_booking (id, user_id, provider_id, service, area, slot, price, status, cancel_503_served, created_at, updated_at)
+         VALUES ('rogue', ?, (SELECT id FROM mock_provider LIMIT 1), 'plumber', 'hsr_layout', '2026-11-05T10:00:00+05:30', 500, 'booked', 0, 1, 1)`,
+      )
+      .run(w.user);
+    expect(checkInvariants(w.testDb.db, { modelCalls: 6, toolCalls: 10, elapsedMs: 60_000 })).toMatch(/^I-1/);
+    w.testDb.close();
+  });
+
+  it("I-3: a 'Booked:' reply whose run never saw get_booking_status say booked is reported", async () => {
+    const w = evalWorld();
+    const result = await runScenario(w.testDb.db, SCENARIOS["E0"]!, w.user);
+    expect(result.pass).toBe(true);
+    w.testDb.db.prepare(`UPDATE message SET text = 'Booked: nothing really' WHERE role = 'agent'`).run();
+    expect(checkInvariants(w.testDb.db, { modelCalls: 6, toolCalls: 10, elapsedMs: 60_000 })).toMatch(/^I-3/);
     w.testDb.close();
   });
 });

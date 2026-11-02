@@ -20,11 +20,14 @@ const DAY_LABEL = new Intl.DateTimeFormat("en-GB", {
   month: "short",
 });
 
-/** "Book Deva Pipe Care on Tue 3 Nov at 10:00" — the slot's IST day and time. */
-export const pickText = (providerName: string, slot: string): string => {
+/** "Tue 3 Nov at 10:00" — a slot's IST day and time, as the user reads it. */
+export const slotLabel = (slot: string): string => {
   const parts = Object.fromEntries(DAY_LABEL.formatToParts(new Date(slot)).map((p) => [p.type, p.value]));
-  return `Book ${providerName} on ${parts.weekday} ${parts.day} ${parts.month} at ${localTime(slot)}`;
+  return `${parts.weekday} ${parts.day} ${parts.month} at ${localTime(slot)}`;
 };
+
+/** "Book Deva Pipe Care on Tue 3 Nov at 10:00". */
+export const pickText = (providerName: string, slot: string): string => `Book ${providerName} on ${slotLabel(slot)}`;
 
 export type OptionsResult =
   | { ok: true; blocks: OptionBlock[] }

@@ -2,6 +2,7 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, readTrace } from "../tracing/index.js";
 import { approvalRepo } from "../approval/index.js";
+import { authorizeWrite } from "../booking/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel } from "../agent/index.js";
 import { createMockSettings, createToolGateway, DEFAULT_SEED, type ForcedQueue, type MockSettings } from "../tools/index.js";
@@ -56,8 +57,22 @@ export const createConversationService = (deps: ConversationsDeps) => {
     trace.record("run_started", { trigger, conversationId, userId, phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none" });
     if (userMessage) repo.addMessage(conversationId, run.id, "user", userMessage.text, [], clock.now().getTime(), userMessage.clientMessageId);
     try {
-      const gateway = createToolGateway({ db, clock, settings: mockSettings, forced, seed: deps.mock?.seed ?? DEFAULT_SEED, userId, trace });
-      workflowStore.useRun({ trace, search: gateway.searchProviders, hold: gateway.holdSlot });
+      const gateway = createToolGateway({
+        db,
+        clock,
+        settings: mockSettings,
+        forced,
+        seed: deps.mock?.seed ?? DEFAULT_SEED,
+        userId,
+        trace,
+        authorizeWrite: authorizeWrite(db, userId), // Gate 2 (R1)
+      });
+      workflowStore.useRun({
+        trace,
+        search: gateway.searchProviders,
+        hold: gateway.holdSlot,
+        book: { book: gateway.book, status: gateway.getBookingStatus },
+      });
       const outcome = await step(userMessage?.text ?? "").finally(() => workflowStore.useRun(undefined));
       const toolCalls = gateway.toolCallsUsed();
       const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));

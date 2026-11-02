@@ -60,8 +60,9 @@ describe("approving", () => {
     const card = await t.toCard();
     const result = await t.click(card.approvalId, "approve");
     if (!result.ok) throw new Error(result.code);
-    expect(t.approval(card.approvalId)).toMatchObject({ status: "approved", decided_via: "button" });
-    expect(t.workflow().phase).toBe("executing");
+    // approved, then used at once by the operation it authorizes (§ 2.5.6 step 1)
+    expect(t.approval(card.approvalId)).toMatchObject({ status: "used", decided_via: "button" });
+    expect(["done", "failed"]).toContain(t.workflow().phase);
     const events = readTrace(t.testDb.db, result.reply.runId);
     expect(events.find((e) => e.type === "approval_event")?.data).toMatchObject({
       event: "approved",
@@ -75,24 +76,30 @@ describe("approving", () => {
     const t = await setup();
     const card = await t.toCard();
     await t.say("yes", card.approvalId);
-    expect(t.approval(card.approvalId)).toMatchObject({ status: "approved", decided_via: "typed" });
+    expect(t.approval(card.approvalId)).toMatchObject({ status: "used", decided_via: "typed" });
 
     const u = await setup();
     const other = await u.toCard();
     await u.say("go ahead");
-    expect(u.approval(other.approvalId)).toMatchObject({ status: "approved", decided_via: "typed" });
+    expect(u.approval(other.approvalId)).toMatchObject({ status: "used", decided_via: "typed" });
     t.testDb.close();
     u.testDb.close();
   });
 
-  it("a second approve of the same card changes nothing and says it is already approved", async () => {
+  it("a second approve of the same card starts no second operation and no second booking", async () => {
     const t = await setup();
     const card = await t.toCard();
     await t.click(card.approvalId, "approve");
+    const bookings = () =>
+      (t.testDb.db.prepare(`SELECT COUNT(*) AS c FROM mock_booking`).get() as { c: number }).c;
+    const before = bookings();
     const again = await t.click(card.approvalId, "approve");
     if (!again.ok) throw new Error(again.code);
-    expect(again.reply.message.text).toMatch(/already approved/i);
-    expect(t.approval(card.approvalId)).toMatchObject({ status: "approved" });
+    expect(again.reply.message.text).not.toMatch(/^Booked/);
+    expect(
+      t.testDb.db.prepare(`SELECT COUNT(*) AS c FROM operation WHERE approval_id = ?`).get(card.approvalId),
+    ).toEqual({ c: 1 });
+    expect(bookings()).toBe(before);
     t.testDb.close();
   });
 });

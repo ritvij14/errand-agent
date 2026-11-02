@@ -272,7 +272,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U21 Execute a booking and verify it
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `booking/booking.test.ts` (Gate 1: approved+matching → used + `<op id>:1`; refuses pending / mismatched; DB refuses a second operation per approval. Gate 2: refuses no operation, mismatched request, never-used approval, no authorizer), `agent/booking.flow.test.ts` (booked once, verified before the reply; `timeout_booked` reported booked; unverified → "Nothing was booked"), invariants I-1/I-3 negative tests; suite 187/187, evals 5/5 (eval 1 + I-1..I-3 on). QA `/tmp/verify-U21/drive.txt`: 2 booked (one provider booking each, ops `succeeded`, approvals `used`), 1 random `slot_taken` reported truthfully as not booked; trace `book → get_booking_status → succeeded`. Migration `007_operation.sql`.
 - **Depends on.** U20.
 - **Covers.** MH-2 (gateway check), MH-3, FR-11, § 2.5.6 operation record and keys, R1.
 - **Build.** `server/src/booking` operations table. One transaction marks the approval used, creates the operation (`in_flight`, key `<op id>:1`) and moves the workflow to `executing`. The gateway executes `book` only for a persisted operation linked to its used approval with a matching request (R1). A successful `book` is always confirmed with `get_booking_status` before the reply says booked. Eval invariants I-1 (agent-created bookings only), I-2 and I-3 switch on.

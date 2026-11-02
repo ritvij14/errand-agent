@@ -15,6 +15,21 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "expect", replyContains: "plumber" },
     ],
   },
+  "1": {
+    id: "1",
+    name: "Happy path: plumber this week, mornings, under ₹1,500 → booked and verified",
+    description: "FR-2, MH-3: search, pick, approve; the booking is made once, confirmed with get_booking_status, then reported.",
+    seed: "eval-seed",
+    steps: [
+      { step: "force", tool: "book", outcome: "ok" },
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "expect", phase: "choosing" },
+      { step: "pick" },
+      { step: "expect", phase: "awaiting_approval", cardMatchesApproval: true, agentBookings: 0 },
+      { step: "click", decision: "approve" },
+      { step: "expect", phase: "done", replyContains: "Booked:", agentBookings: 1, outcome: "completed" },
+    ],
+  },
   "2": {
     id: "2",
     name: "Only missing details asked; 'any budget' never asked again",

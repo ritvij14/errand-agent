@@ -5,7 +5,8 @@ import type { AgentModel, ReadResult } from "./index.js";
 import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
 import type { Trace } from "../tracing/index.js";
 import type { ProviderSummary, ToolResult } from "../tools/index.js";
-import { buildOptions, searchRange, type OptionBlock } from "./options.js";
+import { buildOptions, searchRange, slotLabel, type OptionBlock } from "./options.js";
+import { executeBook, operationRepo, startBookOperation, type BookTools } from "../booking/index.js";
 import { APPROVAL_MAX_AGE_MS, approvalCardPart, approvalRepo, type ApprovalRecord } from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
@@ -50,7 +51,7 @@ export type SearchTool = (args: { service: string; area: string; from: string; t
 export type HoldTool = (args: Selection) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
 
 /** What the run applying a message lends the store: its trace (MH-7) and its tools. */
-export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool };
+export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool; book?: BookTools };
 
 const REQUIRED = ["service", "area", "time_window"] as const;
 
@@ -115,7 +116,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   let trace: Trace | undefined;
   let search: SearchTool | undefined;
   let hold: HoldTool | undefined;
+  let bookTools: BookTools | undefined;
   const approvals = approvalRepo(db);
+  const operations = operationRepo(db);
   const nowMs = () => clock.now().getTime();
 
   const getActive = (conversationId: string): WorkflowRow | undefined => {
@@ -184,6 +187,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       trace = run?.trace;
       search = run?.search;
       hold = run?.hold;
+      bookTools = run?.book;
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
@@ -407,9 +411,21 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     approvals.decide(target.id, status, via, nowMs());
     trace?.record("approval_event", { approvalId: target.id, event: status, via, action: target.action, providerId: target.provider_id, slot: target.slot, price: target.price });
     if (decision === "approve") {
-      // U21 executes from `executing`; until then the approved booking waits here
-      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "executing" }));
-      return { phase: "executing", reply: "Approved.", facts: (saved.workflow ?? w).facts };
+      // § 2.5.6 step 1 (Gate 1): approval used + operation created + workflow executing, one transaction
+      let moved: WorkflowRow | undefined;
+      const started = startBookOperation(
+        db,
+        clock,
+        target.id,
+        { providerId: target.provider_id, slot: target.slot, price: target.price, holdId: w.hold?.holdId ?? "" },
+        () => {
+          moved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, phase: "executing" })).workflow;
+          if (!moved) throw new Error("workflow changed while approving"); // rolls the whole step back
+        },
+      );
+      if (!started.ok || !moved) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      trace?.record("operation_event", { event: "created", kind: "book", key: started.operation.idempotency_key });
+      return advance(moved);
     }
     // R9: decline goes back by intent — a booking returns to the same options
     const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, selection: null, hold: null, phase: "choosing" }));
@@ -472,8 +488,35 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return { phase: "awaiting_approval", reply, facts: result.workflow.facts, parts: [approvalCardPart(result.record, block.provider.name)] };
   }
 
-  /** Phases that need no user input run now (§ 2.5.3 step 6): searching, holding. */
+  /**
+   * `executing` → `verifying` → `done` (§ 2.5.6). The reply says "Booked:" only after
+   * get_booking_status said booked (I-3); otherwise it reports the checked status (R5).
+   */
+  function executeOperation(w: WorkflowRow): ApplyOutcome {
+    const op = operations.inFlightFor(w.id)!;
+    let current = w;
+    const outcome = executeBook(db, clock, bookTools!, op, () => {
+      current = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: "verifying" })).workflow ?? current;
+    });
+    trace?.record("operation_event", { event: outcome.ok ? "succeeded" : "failed", kind: "book", key: op.idempotency_key, result: outcome.ok ? outcome.bookingId : outcome.checkedStatus });
+    const finished = saveWorkflow(w.conversation_id, current.version, (wf) => ({ ...wf, phase: outcome.ok ? "done" : "failed" }));
+    const facts = (finished.workflow ?? current).facts;
+    if (!outcome.ok) {
+      return { phase: "failed", reply: "Nothing was booked — I checked with the provider and there is no booking for this request. Ask me to try again.", facts, code: "BOOKING_FAILED" };
+    }
+    const selection = w.selection!;
+    const name = (w.candidates as OptionBlock[]).find((b) => b.provider.id === selection.providerId)?.provider.name ?? selection.providerId;
+    const price = w.hold?.quotedPrice ?? 0;
+    return {
+      phase: "done",
+      reply: `Booked: ${name} on ${slotLabel(selection.slot)}, ₹${price.toLocaleString("en-IN")}. Booking id: ${outcome.bookingId}.`,
+      facts,
+    };
+  }
+
+  /** Phases that need no user input run now (§ 2.5.3 step 6): searching, holding, executing. */
   function advance(w: WorkflowRow): ApplyOutcome {
+    if (w.phase === "executing" && bookTools) return executeOperation(w);
     if (w.phase === "holding" && hold) return holdSelection(w);
     if (w.phase !== "searching" || !search) return replyFor(w);
     const service = String(w.facts.service!.value);
