@@ -78,9 +78,11 @@ CREATE TABLE message (
   role TEXT NOT NULL CHECK (role IN ('user','agent')),
   text TEXT NOT NULL,
   parts TEXT NOT NULL DEFAULT '[]',         -- JSON: Parts (api-contracts.md)
+  client_message_id TEXT,                   -- user messages only; UNIQUE when set (R2: idempotent sends)
   created_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX message_by_conversation ON message(conversation_id, created_at);
+CREATE UNIQUE INDEX one_reply_per_client_message_id ON message(client_message_id) WHERE client_message_id IS NOT NULL;
 
 CREATE TABLE trace_event (
   run_id TEXT NOT NULL REFERENCES run(id),
@@ -157,6 +159,7 @@ CREATE TABLE operation (
   idempotency_key TEXT NOT NULL UNIQUE,     -- '<operation id>:<n>', n = hold sequence
   hold_seq INTEGER NOT NULL DEFAULT 1,
   request TEXT NOT NULL,                    -- JSON: exactly what is sent
+  booking_id TEXT,                          -- extract of request for cancel / reschedule (R3); null for book
   status TEXT NOT NULL CHECK (status IN ('in_flight','succeeded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   result TEXT,                              -- JSON
@@ -164,6 +167,8 @@ CREATE TABLE operation (
   updated_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX operation_in_flight ON operation(status) WHERE status = 'in_flight';  -- startup recovery
+-- R3: at most one in-flight operation per target booking (nulls exempt, so book is unaffected):
+CREATE UNIQUE INDEX one_in_flight_operation_per_booking ON operation(booking_id) WHERE status = 'in_flight';
 ```
 
 ### Memory — owned by Memory (§ 2.5.8)
@@ -244,6 +249,7 @@ CREATE TABLE mock_booking (
   user_id TEXT NOT NULL,
   provider_id TEXT NOT NULL REFERENCES mock_provider(id),
   service TEXT NOT NULL,
+  area TEXT NOT NULL,                       -- the area the booking was made for (R4 reading)
   slot TEXT NOT NULL,
   price INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('booked','cancelled')),  -- 'completed' is derived: slot in the past
