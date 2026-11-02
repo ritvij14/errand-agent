@@ -13,6 +13,7 @@ vi.mock("../shared/api-client.js", () => ({
     sendMessage: vi.fn(),
     decideApproval: vi.fn(),
     signOut: vi.fn(),
+    memory: vi.fn(),
   },
 }));
 

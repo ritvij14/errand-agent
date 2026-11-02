@@ -7,9 +7,16 @@ import type { Request } from "express";
 // Public API of the auth feature. Other features never import auth-core or
 // auth.routes directly — this is the boundary.
 
-export const verifyUser = (db: Db, clock: Clock, req: Request): { userId: string; sessionId: string } | null => {
+export const verifyUser = (
+  db: Db,
+  clock: Clock,
+  req: Request,
+): { userId: string; sessionId: string } | null => {
   const session = verifySession(db, clock, readToken(req));
   return session ? { userId: session.userId, sessionId: session.id } : null;
 };
 
 export { createAuthRouter, COOKIE_NAME, seedDemoUsers };
+/** Test support: the sign-in rate limiter is a module-level map, so a long-running test
+ * file can't sign in over HTTP repeatedly — tests mint sessions directly instead. */
+export { createSession } from "./auth-core.js";

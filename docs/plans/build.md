@@ -431,7 +431,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U34 Memory API and memory panel
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `memory/memory.routes.test.ts` (15 tests, supertest against the real app + real db: GET lists own facts only per user (V-7), unauthenticated 401, PUT corrects with `source: stated` plus per-key validation → 400, PUT/confirm/reject/DELETE on another user's fact → 404 with nothing changed, confirm/reject of awaiting facts, DELETE forgets and keeps the marker), `components/MemoryPanel.test.tsx` (RTL: source labels + waiting note + evidence line; Edit → input → Save reports id+value; Confirm/Reject/Forget wiring; empty state). Sessions in route tests are minted directly with `createSession` because the sign-in rate limiter is a module-level map. Suite 289/289, client 29/29. QA `/tmp/verify-U34/drive.txt`: GET → PUT koramangala (source stays stated) → chat run fills the corrected area with the one-line note → DELETE → GET empty → new conversations ask for the area again.
 - **Depends on.** U33, U14.
 - **Covers.** FR-12 (panel), `docs/infra/api-contracts.md` memory endpoints.
 - **Build.** `GET /api/memory`, `PUT /api/memory/:id`, confirm, reject, `DELETE`, all calling the same memory code as chat. A memory panel with stated and inferred labels and edit, confirm and forget buttons.

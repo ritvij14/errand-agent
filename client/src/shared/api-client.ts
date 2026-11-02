@@ -14,11 +14,16 @@ export class ApiError extends Error {
   }
 }
 
-const request = async <T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE", body?: unknown): Promise<T> => {
+const request = async <T>(
+  path: string,
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  body?: unknown,
+): Promise<T> => {
   const res = await fetch(`/api${path}`, {
     method,
     credentials: "same-origin",
-    headers: method === "GET" ? undefined : { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    headers:
+      method === "GET" ? undefined : { "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
   });
   const text = await res.text();
@@ -28,21 +33,53 @@ const request = async <T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE
 };
 
 export type Me = { user: { id: string; username: string } };
-export type ConversationSummary = { id: string; title: string; createdAt: number; updatedAt: number; busy: boolean };
+export type MemoryFact = {
+  id: string;
+  key: string;
+  service: string | null;
+  value: string;
+  source: "stated" | "inferred";
+  status: "active" | "awaiting_confirmation" | "forgotten";
+  evidence?: string | null;
+  updatedAt: number;
+};
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  busy: boolean;
+};
 export type Message = { id: string; role: "user" | "agent"; text: string; parts: unknown[]; runId?: string };
-export type Reply = { runId: string; outcome: string; message: { id: string; role: string; text: string; parts: unknown[] } };
+export type Reply = {
+  runId: string;
+  outcome: string;
+  message: { id: string; role: string; text: string; parts: unknown[] };
+};
 
 export const api = {
   me: () => request<Me>("/auth/me", "GET"),
-  signIn: (username: string, password: string) => request<Me>("/auth/sign-in", "POST", { username, password }),
-  signUp: (username: string, password: string) => request<Me>("/auth/sign-up", "POST", { username, password }),
+  signIn: (username: string, password: string) =>
+    request<Me>("/auth/sign-in", "POST", { username, password }),
+  signUp: (username: string, password: string) =>
+    request<Me>("/auth/sign-up", "POST", { username, password }),
   signOut: () => request<void>("/auth/sign-out", "POST"),
   conversations: () => request<ConversationSummary[]>("/conversations", "GET"),
   createConversation: () => request<ConversationSummary>("/conversations", "POST", {}),
-  conversation: (id: string) => request<{ conversation: ConversationSummary; messages: Message[]; busy: boolean }>(`/conversations/${id}`, "GET"),
+  conversation: (id: string) =>
+    request<{ conversation: ConversationSummary; messages: Message[]; busy: boolean }>(
+      `/conversations/${id}`,
+      "GET",
+    ),
   /** `approvalId`: the card on screen, so a typed yes answers that card (§ 2.5.5 rule 1) */
   sendMessage: (id: string, text: string, clientMessageId: string, approvalId?: string) =>
     request<Reply>(`/conversations/${id}/messages`, "POST", { text, clientMessageId, approvalId }),
   decideApproval: (approvalId: string, decision: "approve" | "decline") =>
     request<Reply>(`/approvals/${approvalId}/decision`, "POST", { decision }),
+  // FR-12 (U34): the memory panel — the same facts chat saves, listed and edited directly
+  memory: () => request<MemoryFact[]>("/memory", "GET"),
+  updateMemory: (id: string, value: string) => request<MemoryFact>(`/memory/${id}`, "PUT", { value }),
+  confirmMemory: (id: string) => request<MemoryFact>(`/memory/${id}/confirm`, "POST", {}),
+  rejectMemory: (id: string) => request<MemoryFact>(`/memory/${id}/reject`, "POST", {}),
+  forgetMemory: (id: string) => request<{ id: string; forgotten: boolean }>(`/memory/${id}`, "DELETE", {}),
 };

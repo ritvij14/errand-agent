@@ -6,6 +6,7 @@ import type { AgentModel } from "./agent/index.js";
 import { sendError, sendUnknownError } from "./shared/errors.js";
 import { createAuthRouter, verifyUser } from "./auth/index.js";
 import { createConversationsRouter } from "./conversations/index.js";
+import { createMemoryRouter } from "./memory/index.js";
 
 export type AppDeps = { db: Db; clock: Clock; model: AgentModel };
 
@@ -35,6 +36,7 @@ export function createApp(deps: Partial<AppDeps> = {}) {
     app.use(express.json({ type: () => true }));
     app.use("/api", createAuthRouter({ db: deps.db, clock: deps.clock }));
     app.use("/api", createConversationsRouter({ db: deps.db, clock: deps.clock, model: deps.model }));
+    app.use("/api", createMemoryRouter({ db: deps.db, clock: deps.clock }));
     // anything that mutates should know who is calling — future routers check verifyUser(deps.db, deps.clock, req)
     void verifyUser;
 

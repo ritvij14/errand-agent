@@ -15,6 +15,7 @@ export type MemoryFactRecord = {
   status: "active" | "awaiting_confirmation" | "forgotten";
   /** why the fact was inferred, naming the bookings (2.5.8) */
   evidence?: string | null;
+  updatedAt: number;
 };
 
 const decode = (row: Record<string, unknown>): MemoryFactRecord => ({
@@ -25,6 +26,7 @@ const decode = (row: Record<string, unknown>): MemoryFactRecord => ({
   source: row.source as MemoryFactRecord["source"],
   status: row.status as MemoryFactRecord["status"],
   evidence: (row.evidence as string | null) ?? null,
+  updatedAt: (row.updated_at as number) ?? 0,
 });
 
 // `service` only narrows `preferred_provider`; other keys are one per user.
@@ -39,6 +41,13 @@ const findAny = (
       `SELECT * FROM memory_fact WHERE user_id = ? AND key = ? AND (key <> 'preferred_provider' OR ? IS NULL OR service = ?) ORDER BY updated_at DESC LIMIT 1`,
     )
     .get(userId, key, service ?? null, service ?? null) as Record<string, unknown> | undefined;
+  return row ? decode(row) : undefined;
+};
+
+/** The user's fact by id — only served when it is that user's (V-7 / panel). */
+export const byId = (db: Db, userId: string, factId: string): MemoryFactRecord | undefined => {
+  const row = db.prepare(`SELECT * FROM memory_fact WHERE id = ? AND user_id = ?`).get(factId, userId) as
+    Record<string, unknown> | undefined;
   return row ? decode(row) : undefined;
 };
 

@@ -6,8 +6,14 @@ import {
   useDecideApproval,
   useSendMessage,
   useSignOut,
+  useMemory,
+  useEditMemory,
+  useConfirmMemory,
+  useRejectMemory,
+  useForgetMemory,
 } from "../shared/queries.js";
 import type { Message } from "../shared/api-client.js";
+import { MemoryPanel } from "../components/MemoryPanel.js";
 import { isApprovalCard, isBookingsList, isOptionBlocks, isProviderDetails } from "../shared/parts.js";
 import { OptionBlocks } from "../components/OptionBlocks.js";
 import { ApprovalCard } from "../components/ApprovalCard.js";
@@ -24,6 +30,11 @@ export function Chat() {
   const conversation = useConversation(selected, selected !== null);
   const sendMessage = useSendMessage(selected ?? "");
   const decide = useDecideApproval(selected ?? "");
+  const memory = useMemory(true);
+  const editMemory = useEditMemory();
+  const confirmMemory = useConfirmMemory();
+  const rejectMemory = useRejectMemory();
+  const forgetMemory = useForgetMemory();
   const [draft, setDraft] = useState("");
   // 2.3: nothing new is sent — typed, tapped or clicked — while a reply is pending
   const busy = sendMessage.isPending || decide.isPending || create.isPending || signOut.isPending;
@@ -68,6 +79,20 @@ export function Chat() {
               {c.title}
             </button>
           ))}
+          <MemoryPanel
+            facts={memory.data ?? []}
+            busy={
+              busy ||
+              editMemory.isPending ||
+              confirmMemory.isPending ||
+              rejectMemory.isPending ||
+              forgetMemory.isPending
+            }
+            onEdit={(id, value) => editMemory.mutate({ id, value })}
+            onConfirm={(id) => confirmMemory.mutate({ id })}
+            onReject={(id) => rejectMemory.mutate({ id })}
+            onForget={(id) => forgetMemory.mutate({ id })}
+          />
         </aside>
         <main className="flex flex-1 flex-col overflow-hidden">
           <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-neutral-200 p-3">

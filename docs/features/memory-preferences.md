@@ -1,11 +1,11 @@
 # Memory & preferences (MH-6)
 
-> Status: stated + inferred memory live (U32, U33). The memory panel and its API (U34) come next.
+> Status: stated + inferred memory + the memory HTTP API + the client panel live (U32–U34).
 
 ## What exists
 
 - `memory_fact` table (`migrations/008_memory.sql`) — `id, user_id, key, service, value, source ('stated'|'inferred'), status ('active'|'awaiting_confirmation'|'forgotten'), evidence, created_at, updated_at, confirmed_at, forgotten_at`. STRICT; a forgotten row is kept as a hidden marker (key + value) that blocks re-**inference** of the same value.
-- `server/src/memory` — the only code that touches the table. `state` (active fact for a key), `view` (active + awaiting), `saveStated` (insert, or correct in place — including re-stating a forgotten fact, which is the user's choice), `forget`, `blockedByForget` (the marker U33 must respect).
+- `server/src/memory` — the only code that touches the table. `state` (active fact for a key), `view` (active + awaiting), `saveStated` (insert, or correct in place — including re-stating a forgotten fact, which is the user's choice), `forget`, `blockedByForget` (the marker U33 must respect), `byId` / `inferCandidate` / `confirm` / `reject` (U33), and the HTTP routes (`memory.routes.ts`, mounted in `app.ts`, U34).
 
 ## How facts get in (U32)
 
@@ -19,6 +19,10 @@
 - **Yes** (`decideMemoryConfirm`) → `active` (+ `confirmed_at`; `source` stays `inferred`), **used immediately**: an area fact fills the workflow and the flow advances; a provider narrows the options on screen to just their slots ("Saved your choice: X. Here are their times…"). **No** → the fact is `forgotten` and the value blocked from re-inference.
 - **While awaiting, the fact is never used (I-7):** the search filter and R6 fill read only `status = 'active'` records. The runner checks that every `source = memory` workflow fact points at an active store row (I-6 covers forgotten, I-7 covers not-yet-confirmed).
 - **Active preferred providers narrow the search** (`advance`'s searching step): the searched providers are filtered to the saved one, with a "Using your saved choice: X." note; when they have no free slot the reply says so instead of silently widening.
+
+## The memory endpoints (U34 server side)
+
+`GET /api/memory`, `PUT /api/memory/:id`, `POST /api/memory/:id/confirm`, `POST /api/memory/:id/reject`, `DELETE /api/memory/:id` — all guarded by the auth session (401 unauthenticated; 404 for another user's fact, V-7), served through `memory.byId` bound to the signed-in user. PUT validates the value per key (area enum, `HH:MM`, provider id) else 400, and corrects in place, so `source` becomes `stated`. confirm/reject act only on `awaiting_confirmation` facts; DELETE forgets and keeps the row as the re-inference marker. The actions change memory directly — they are not runs. Integration tests: `memory/memory.routes.test.ts` (supertest against the real app and real db).
 
 ## How facts are used
 
@@ -38,3 +42,12 @@
 
 - **16** — state area → new conversation uses it with the note → correct → forget → never filled again.
 - **19** — saved area HSR, booking in Jayanagar → Jayanagar used for that request only, note shown, memory unchanged (V-11).
+
+## The client panel (U34, FR-12)
+
+- `components/MemoryPanel.tsx` — rendered in the chat sidebar under the conversation list. Each fact shows its display value (area name, "not before 10:00", provider id), the source label ("you told me" / "I worked out"), the evidence line for inferred facts, and its actions:
+  - **Edit** → an inline input + Save (`useEditMemory` → `PUT`); the panel's labels are presentational, the server re-validates the value.
+  - **Confirm / Reject** for `awaiting_confirmation` facts (`POST` confirm/reject).
+  - **Forget** for active ones (`DELETE`; the row stays as the re-inference marker).
+- Data flows through `shared/api-client.ts` (`api.memory*`) + `shared/queries.ts` (`useMemory` with staleness 5 s; every mutation invalidates `["memory"]` **and** `["conversation"]` so an open workflow learns the change at its next run (R6)).
+- The panel is disabled while any send, decision or memory mutation is pending (2.3).

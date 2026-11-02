@@ -1,5 +1,6 @@
 export {
   blockedByForget,
+  byId,
   confirm,
   forget,
   inferCandidate,
@@ -9,3 +10,4 @@ export {
   view,
   type MemoryFactRecord,
 } from "./memory.repo.js";
+export { createMemoryRouter } from "./memory.routes.js";
