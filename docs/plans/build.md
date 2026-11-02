@@ -479,7 +479,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U38 README and clean-clone check
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `README.md` rewritten: 3 commands (`npm install`, `npm test`, `npm run dev`), demo users, example prompts each driven on the dev server (book, show bookings, cancel, reschedule to Saturday, Details on Sri Sai Plumbing Works = the app-seed injection review, stated area), other commands (evals, reset, trace export, `DEMO_FORCE`), deliverables table. QA: `git clone` into `/tmp/errand-clone-<ts>`, then the README's commands only. First clone **failed** `npm test`: evals opened `server/data/eval-*.db` but `server/data/` is git-ignored, so absent in a clone → fixed in `1c73cd6` (CLI `mkdir`). Second clone: install ok, 300/300 + evals 30/30 + client 34/34, `npm run dev` → page 200 and alice signs in through `:5173/api`. Logs `/tmp/errand-verify/clone-test.log`. Found, not fixed (reported): plain "evening" / "Saturday evening" is ignored by `time-window.ts` (only "tonight" / "this evening" are read).
 - **Depends on.** U37.
 - **Covers.** Deliverable 1.
 - **Build.** README runs and tests the project in 3 commands or fewer (install, dev, test), plus demo users and the eval command.

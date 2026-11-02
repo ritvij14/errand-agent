@@ -240,13 +240,15 @@ PORT=3001              # Express port; Vite proxies /api here. Optional — this
 # 1. Install dependencies (workspaces + all tooling)
 npm install
 
-# 2. Start both processes in parallel (Express :3001 + Vite :5173)
+# 2. Server tests, then the evals, then client tests (no dev server needed)
+npm test
+
+# 3. Start both processes in parallel (Express :3001 + Vite :5173)
 #    Browser talks only to http://localhost:5173 — Vite forwards /api to Express (ADR-001)
 npm run dev
-
-# 3. Run the test suite (server workspace, Vitest)
-npm test
 ```
+
+Verified from a fresh `git clone` (U38). Git-ignored folders (`server/data/`, `traces/`) are created by the code that writes them.
 
 **Key scripts (all run from the repo root unless noted):**
 
