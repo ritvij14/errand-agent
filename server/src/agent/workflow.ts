@@ -4,7 +4,7 @@ import type { Clock } from "../shared/clock.js";
 import type { AgentModel, ReadResult } from "./index.js";
 import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
 import type { Trace } from "../tracing/index.js";
-import type { BookingRecord, ProviderSummary, ToolResult } from "../tools/index.js";
+import type { BookingRecord, ProviderDetails, ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, movePickText, searchRange, slotLabel, type OptionBlock } from "./options.js";
 import {
   executeBook,
@@ -92,6 +92,8 @@ export type RunTools = {
   search?: SearchTool;
   hold?: HoldTool;
   list?: ListTool;
+  /** FR-6 (U31): details + reviews; the gateway flags and caps review text (2.5.7) */
+  details?: DetailsTool;
   book?: BookTools;
   cancel?: CancelTools;
   reschedule?: RescheduleTools;
@@ -157,6 +159,7 @@ const timeFactHasBounds = (fact: (Fact & { value: TimeWindow | null }) | undefin
   return !!w && (w.dateFrom !== null || w.dateTo !== null || w.earliest !== null || w.latest !== null);
 };
 
+type DetailsTool = { getProvider: (providerId: string) => ToolResult<ProviderDetails> };
 type Held = { holdId: string; expiresAt: number; quotedPrice: number };
 
 /** The provider's display name from the saved option blocks. */
@@ -218,6 +221,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
   let bookTools: BookTools | undefined;
   let cancelTools: CancelTools | undefined;
   let rescheduleTools: RescheduleTools | undefined;
+  let getProvider: DetailsTool["getProvider"] | undefined;
   /** the run's counted model (caps, NFR-1); the store's own model outside a run */
   let runModel: AgentModel | undefined;
   const approvals = approvalRepo(db);
@@ -348,6 +352,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     // an unusable read is read again; the model-call cap stops a model that never gives one
     while (read.kind === "unusable") read = await (runModel ?? model).read(readJob);
 
+    if (read.kind === "provider_details") return providerDetails(active, read.providerId);
     if (read.kind === "list_bookings") return listMyBookings(active);
     if (read.kind === "cancel") return startChange("cancel", userId, conversationId, active, text);
     if (read.kind === "reschedule")
@@ -549,6 +554,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       bookTools = run?.book;
       cancelTools = run?.cancel;
       rescheduleTools = run?.reschedule;
+      getProvider = run?.details?.getProvider;
       runModel = run?.model;
     },
 
@@ -1135,6 +1141,58 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * A request already in progress is never dropped silently — the user drops it first
    * (asking comes with U30).
    */
+  /**
+   * FR-6 (U31): answer a details question without touching the workflow — the reply is
+   * built from structured fields only (2.5.7 rule 2) and reviews ride as a labelled part
+   * the model's read never saw (rule 1). Only the user's ask brings them here.
+   */
+  function providerDetails(active: WorkflowRow | undefined, providerId?: string): ApplyOutcome {
+    if (!providerId)
+      return {
+        phase: active?.phase ?? "collecting",
+        reply: "Use the “Details” link under a provider in the results — or search for a service first.",
+        facts: active?.facts ?? ({} as Facts),
+      };
+    if (!getProvider)
+      return {
+        phase: active?.phase ?? "collecting",
+        reply: "",
+        code: "unknown_error",
+        facts: active?.facts ?? ({} as Facts),
+      };
+    const found = getProvider(providerId);
+    if (!found.ok)
+      return {
+        phase: active?.phase ?? "collecting",
+        reply: "I couldn't get that provider's details just now — please try again.",
+        facts: active?.facts ?? ({} as Facts),
+        code: found.error,
+      };
+    const d = found.data;
+    const bits = [
+      `${d.name} — ${SERVICE_NAMES[d.service] ?? d.service}, ${rupees(d.price)}, rating ${d.rating}`,
+      d.attributes?.verified === true ? ", verified" : "",
+      typeof d.attributes?.warranty_days === "number" && d.attributes.warranty_days > 0
+        ? `, ${d.attributes.warranty_days}-day warranty`
+        : "",
+    ];
+    return {
+      phase: active?.phase ?? "collecting",
+      reply: `${bits.join("")}. Reviews are below exactly as the provider returned them — not checked.`,
+      facts: active?.facts ?? ({} as Facts),
+      parts: [
+        {
+          type: "provider_details",
+          provider: { id: d.id, name: d.name, service: d.service, price: d.price, rating: d.rating },
+          reviews: d.reviews.map((r) => ({
+            text: r.text,
+            ...(r.suspectedInjection ? { suspectedInjection: true } : {}),
+          })),
+        },
+      ],
+    };
+  }
+
   /**
    * FR-15: a different request on an unfinished workflow asks before dropping it. R9:
    * with an approval card open the question would stack, so the card is resolved first;

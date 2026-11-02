@@ -89,6 +89,29 @@ describe("corrections (R9)", () => {
     expect(await read("cancel my AC servicing")).not.toMatchObject({ kind: "drop" });
   });
 
+  it('"tell me about provider 2" / a provider name with options → details read (FR-6)', async () => {
+    const options = [
+      {
+        provider: { id: "mp-001", name: "Sri Sai Plumbing Works", rating: 4.1, price: 500 },
+        slots: [{ start: "2026-11-06T10:00:00+05:30", label: "", pickText: "" }],
+      },
+      { provider: { id: "mp-010", name: "Kalyani Woodworks", rating: 4.4, price: 800 }, slots: [] },
+    ];
+    const withOptions = (text: string) =>
+      scriptedModel.read({ text, waitingFor: "choosing", clock: createClock({ now: FIX_NOW }), options });
+    expect(await withOptions("tell me about provider 2")).toMatchObject({
+      kind: "provider_details",
+      providerId: "mp-010",
+    });
+    expect(await withOptions("Tell me more about Kalyani Woodworks")).toMatchObject({
+      kind: "provider_details",
+      providerId: "mp-010",
+    });
+    expect(await withOptions("tell me about the provider with the best warranty")).toMatchObject({
+      kind: "provider_details",
+    });
+  });
+
   it('"correction phrase but not a time fact" merges; "never mind" is a drop', async () => {
     expect(await read("never mind")).toMatchObject({ kind: "drop" });
     expect(await read("forget it")).toMatchObject({ kind: "drop" });

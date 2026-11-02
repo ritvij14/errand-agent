@@ -96,7 +96,9 @@ export const createConversationService = (deps: ConversationsDeps) => {
       read: async (job) => {
         budget.beforeModelCall();
         const result: ReadResult =
-          forced.take("model_read", 0)?.outcome === "unusable" ? { kind: "unusable" } : await budget.race(model.read(job));
+          forced.take("model_read", 0)?.outcome === "unusable"
+            ? { kind: "unusable" }
+            : await budget.race(model.read(job));
         trace.record("model_call", { job: "read", input: job.text, output: result.kind });
         return result;
       },
@@ -124,6 +126,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
         search: gateway.searchProviders,
         hold: gateway.holdSlot,
         list: gateway.listBookings,
+        details: { getProvider: gateway.getProvider },
         book: {
           book: gateway.book,
           status: gateway.getBookingStatus,
@@ -147,13 +150,29 @@ export const createConversationService = (deps: ConversationsDeps) => {
         // § 2.5.2 rule 5: a booking cut off by a restart is finished before the new input is read
         const recovered = trigger === "recovery" ? undefined : workflowStore.recover(conversationId);
         if (recovered?.reply)
-          repo.addMessage(conversationId, run.id, "agent", recovered.reply, (recovered.parts ?? []) as ReplyPart[], clock.now().getTime());
+          repo.addMessage(
+            conversationId,
+            run.id,
+            "agent",
+            recovered.reply,
+            (recovered.parts ?? []) as ReplyPart[],
+            clock.now().getTime(),
+          );
         if (userMessage)
-          repo.addMessage(conversationId, run.id, "user", userMessage.text, [], clock.now().getTime(), userMessage.clientMessageId);
+          repo.addMessage(
+            conversationId,
+            run.id,
+            "user",
+            userMessage.text,
+            [],
+            clock.now().getTime(),
+            userMessage.clientMessageId,
+          );
         const outcome = await step(userMessage?.text ?? "");
         // the write job: when the code already decided the wording it still counts as the run's write
         if (outcome.reply) budget.beforeModelCall();
-        const text = outcome.reply || (await countedModel.write({ purpose: outcome.code ?? "help", state: {} }));
+        const text =
+          outcome.reply || (await countedModel.write({ purpose: outcome.code ?? "help", state: {} }));
         trace.record("model_call", { job: "write", output: text });
         ending = { outcome: runOutcomeOf(outcome.code), text, parts: (outcome.parts ?? []) as ReplyPart[] };
       } catch (error) {
@@ -163,9 +182,15 @@ export const createConversationService = (deps: ConversationsDeps) => {
           ending = { outcome: error.cap, text: capReply(error.cap, conversationId), parts: [] };
         } else {
           // details stay in the trace; the reply comes from the operation's checked status (R5)
-          const internalDetails = (error instanceof Error ? (error.stack ?? error.message) : String(error)).slice(0, 2000);
+          const internalDetails = (
+            error instanceof Error ? (error.stack ?? error.message) : String(error)
+          ).slice(0, 2000);
           trace.record("error", { code: "unknown_error", internalDetails });
-          ending = { outcome: "unknown_error", text: workflowStore.afterUnknownError(conversationId), parts: [] };
+          ending = {
+            outcome: "unknown_error",
+            text: workflowStore.afterUnknownError(conversationId),
+            parts: [],
+          };
         }
       } finally {
         workflowStore.useRun(undefined);
@@ -173,7 +198,12 @@ export const createConversationService = (deps: ConversationsDeps) => {
       const used = budget.used();
       const endedAt = clock.now().getTime();
       repo.finishRun(run.id, ending.outcome, endedAt, used.modelCalls, used.toolCalls);
-      trace.record("run_ended", { outcome: ending.outcome, modelCalls: used.modelCalls, toolCalls: used.toolCalls, durationMs: used.elapsedMs });
+      trace.record("run_ended", {
+        outcome: ending.outcome,
+        modelCalls: used.modelCalls,
+        toolCalls: used.toolCalls,
+        durationMs: used.elapsedMs,
+      });
       const saved = repo.addMessage(conversationId, run.id, "agent", ending.text, ending.parts, endedAt);
       return { ok: true, reply: toReply({ ...run, outcome: ending.outcome }, saved) };
     } finally {

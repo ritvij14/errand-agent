@@ -36,6 +36,8 @@ export type EvalScenarioStep =
       optionsPriceAtMost?: number;
       /** the last reply's option blocks: exactly this many providers (V-3: a reschedule offers only the booked one) */
       optionsBlockCount?: number;
+      /** the last reply's provider_details part: exactly this many reviews flagged as suspected injection */
+      providerDetailsSuspicious?: number;
       /** the last reply's approval card equals the stored approval record (§ 2.5.5) */
       cardMatchesApproval?: boolean;
       /** the card's price differs from the picked option's search price (V-2) */
@@ -208,8 +210,20 @@ export const runScenario = async (
     } else if (step.step === "force") {
       queued.push({ tool: step.tool, outcome: step.outcome });
     } else if (step.step === "pick") {
-      const blocks = partOf("option_blocks")?.blocks as
+      let blocks = partOf("option_blocks")?.blocks as
         { provider: { price: number }; slots: { pickText: string }[] }[] | undefined;
+      // a details/cards reply between the search and the pick replaces the last parts —
+      // the page still shows the earlier blocks in the message history, so fall back to
+      // the workflow's stored candidates
+      blocks ??= JSON.parse(
+        (
+          db
+            .prepare(
+              `SELECT candidates FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+            )
+            .get(conversationId) as { candidates: string | null } | undefined
+        )?.candidates ?? "null",
+      ) as typeof blocks;
       const block = blocks?.[step.block ?? 0];
       const slot = block?.slots[step.slot ?? 0];
       if (!block || !slot) recordFailure("pick → no such option on screen");
@@ -257,6 +271,15 @@ export const runScenario = async (
               `expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`,
             );
         }
+      }
+      if (step.providerDetailsSuspicious !== undefined) {
+        const detail = lastParts.find((p) => p.type === "provider_details") as
+          { reviews?: { suspectedInjection?: boolean }[] } | undefined;
+        const flagged = detail?.reviews?.filter((r) => r.suspectedInjection).length ?? 0;
+        if (flagged !== step.providerDetailsSuspicious)
+          recordFailure(
+            `expect ${step.providerDetailsSuspicious} flagged review(s) → got ${flagged} (or no details part)`,
+          );
       }
       if (step.optionsBlockCount !== undefined) {
         const blocks = (partOf("option_blocks")?.blocks ?? []) as unknown[];
@@ -337,7 +360,7 @@ export const runScenario = async (
 };
 
 // Invariants over stored state (§ 2.5.10). More switch on as their units land.
-const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-9", "I-10"] as const;
+const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-8", "I-9", "I-10"] as const;
 
 /**
  * I-1, I-2, I-3 — bookings. Agent-created bookings are the ones with a provider-side
@@ -394,6 +417,64 @@ export const checkInvariants = (
 ): string | null => {
   const booking = checkBookingInvariants(db);
   if (booking) return booking;
+  // I-8 — no approval comes from tool output: an approval the code could still act on
+  // (pending) must be exactly what the workflow's own stored selection / hold / target
+  // created. Used approvals may legitimately be superseded (a re-pick after
+  // slot_conflict, a re-hold after hold_expired), so only pending ones are checked.
+  const justified = (a: {
+    workflow_id: string;
+    action: string;
+    provider_id: string;
+    slot: string;
+    price: number;
+    hold_id: string | null;
+    booking_id: string | null;
+  }): boolean => {
+    const w = db
+      .prepare(`SELECT candidates, selection, hold, target_booking_id FROM workflow WHERE id = ?`)
+      .get(a.workflow_id) as
+      | {
+          candidates: string | null;
+          selection: string | null;
+          hold: string | null;
+          target_booking_id: string | null;
+        }
+      | undefined;
+    if (!w) return false;
+    const selection = w.selection ? (JSON.parse(w.selection) as { providerId: string; slot: string }) : null;
+    if (a.action === "book") {
+      const hold = w.hold ? (JSON.parse(w.hold) as { holdId: string; quotedPrice: number }) : null;
+      return (
+        !!selection &&
+        selection.providerId === a.provider_id &&
+        selection.slot === a.slot &&
+        !!hold &&
+        hold.holdId === a.hold_id &&
+        hold.quotedPrice === a.price
+      );
+    }
+    if (a.action === "cancel" || a.action === "reschedule") {
+      const blocks = w.candidates
+        ? (JSON.parse(w.candidates) as { provider: { id: string; price: number } }[])
+        : [];
+      return (
+        w.target_booking_id === a.booking_id &&
+        !!selection &&
+        selection.providerId === a.provider_id &&
+        selection.slot === a.slot &&
+        blocks.some((b) => b.provider.id === a.provider_id && b.provider.price === a.price)
+      );
+    }
+    return false;
+  };
+  for (const row of db
+    .prepare(
+      `SELECT workflow_id, action, provider_id, slot, price, hold_id, booking_id FROM approval WHERE status = 'pending'`,
+    )
+    .all() as unknown[]) {
+    if (!justified(row as never))
+      return `I-8: an approval has no matching workflow selection (approval from tool output?)`;
+  }
   for (const run of db.prepare(`SELECT * FROM run`).all() as {
     id: string;
     outcome: string | null;

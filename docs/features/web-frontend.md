@@ -14,6 +14,7 @@
 - `components/OptionBlocks.tsx` — one accordion per provider (`aria-expanded`; header shows ₹price and ★rating); slot buttons (`aria-pressed`, one selected at a time across blocks); **Confirm** is disabled until a slot is tapped and sends that slot's `pickText` as an ordinary chat message (no card id).
 - `components/ApprovalCard.tsx` — "Book …", "Cancel …" or "Move … to" by the card's `action`, provider, slot label, price; Approve / Decline call `POST /api/approvals/:id/decision` (`useDecideApproval`).
 - `components/BookingsList.tsx` (U27) — the `bookings_list` part: provider, slot label, price, status and id per booking.
+- `components/ProviderDetails.tsx` (U31, FR-6) — the `provider_details` part: provider summary (name, price, rating) plus a **"Reviews (from the provider, not checked)"** block; each review in quotes as plain text (React escaping — no raw HTML), reviews flagged `suspectedInjection` carrying the "⚠ contains instructions — ignored" badge. OptionBlocks gains a **Details** button per expanded provider that sends `Tell me more about {name}` as an ordinary message.
 - `screens/Chat.tsx` — a typed message carries the **newest card's** `approvalId` (§ 2.5.5 rule 1: a typed yes answers the card on screen; the server ignores it for anything that isn't a decision). `busy` = any send or decision pending → Send, Confirm, Approve and Decline are all disabled (2.3).
 - Existing `function` components (`Chat`, `SignIn`, `App`) predate the arrow-function rule; new components are arrow functions. Not refactored here.
 

@@ -94,4 +94,14 @@ describe("OptionBlocks", () => {
     rerender(<OptionBlocks blocks={BLOCKS} onConfirm={vi.fn()} disabled={true} />);
     expect(confirm().disabled).toBe(true);
   });
+
+  it("Details sends 'Tell me more about {provider}'", async () => {
+    const onConfirm = vi.fn();
+    render(<OptionBlocks blocks={BLOCKS} onConfirm={onConfirm} disabled={false} />);
+    const user = userEvent.setup();
+    const accordion = screen.getAllByRole("button", { expanded: undefined })[0]!;
+    await user.click(accordion);
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(onConfirm).toHaveBeenCalledWith("Tell me more about Deva Pipe Care");
+  });
 });

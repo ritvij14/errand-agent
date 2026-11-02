@@ -39,6 +39,13 @@ export const OptionBlocks = ({ blocks, onConfirm, disabled }: Props) => {
                     {slot.label}
                   </button>
                 ))}
+                {/* FR-6: details open via a normal chat message the model reads as a details ask */}
+                <button
+                  className="rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600"
+                  onClick={() => onConfirm(`Tell me more about ${block.provider.name}`)}
+                >
+                  Details
+                </button>
               </div>
             )}
           </div>

@@ -7,8 +7,26 @@ import type { OptionBlock } from "./options.js";
 // machine and its reply-writer own those.
 
 export type ReadResult =
-  | { kind: "workflow"; intent: "book" | "reschedule" | "cancel"; service?: string | null; area?: string | null; budget?: number | "any"; preferences?: string | null; timeWindow?: TimeWindow; unknownService?: boolean; unknownArea?: boolean; timeOutOfRange?: boolean }
-  | { kind: "correction"; target: "time_window" | "budget" | "area" | "service"; text: string; correctionText?: string; mergeTime?: boolean; budget?: number | "any" }
+  | {
+      kind: "workflow";
+      intent: "book" | "reschedule" | "cancel";
+      service?: string | null;
+      area?: string | null;
+      budget?: number | "any";
+      preferences?: string | null;
+      timeWindow?: TimeWindow;
+      unknownService?: boolean;
+      unknownArea?: boolean;
+      timeOutOfRange?: boolean;
+    }
+  | {
+      kind: "correction";
+      target: "time_window" | "budget" | "area" | "service";
+      text: string;
+      correctionText?: string;
+      mergeTime?: boolean;
+      budget?: number | "any";
+    }
   | { kind: "drop" }
   | { kind: "decision"; decision: "yes" | "no" }
   | { kind: "pick"; providerId: string; slot: string }
@@ -20,6 +38,8 @@ export type ReadResult =
   | { kind: "cancel" }
   /** FR-3: "move my AC servicing to Saturday" — the time, when given, is the new time */
   | { kind: "reschedule"; timeWindow?: TimeWindow }
+  /** FR-6: "tell me about provider 2" / a "Details" link — the id comes from the shown options */
+  | { kind: "provider_details"; providerId?: string }
   /** the model's read can't be used (only an eval can force this with the scripted model); read again */
   | { kind: "unusable" };
 
@@ -42,9 +62,14 @@ const readPick = (text: string, options: OptionBlock[], clock: Clock): ReadResul
   const matching = block.slots.filter((s) => {
     const day = s.start.slice(0, 10);
     const time = s.start.slice(11, 16);
-    return (!w?.dateFrom || (day >= w.dateFrom && day <= (w.dateTo ?? w.dateFrom))) && (!w?.earliest || time === w.earliest);
+    return (
+      (!w?.dateFrom || (day >= w.dateFrom && day <= (w.dateTo ?? w.dateFrom))) &&
+      (!w?.earliest || time === w.earliest)
+    );
   });
-  return matching.length === 1 ? { kind: "pick", providerId: block.provider.id, slot: matching[0]!.start } : { kind: "pick_unclear" };
+  return matching.length === 1
+    ? { kind: "pick", providerId: block.provider.id, slot: matching[0]!.start }
+    : { kind: "pick_unclear" };
 };
 
 export const SERVICE_SYNONYMS: Record<string, string> = {
@@ -75,7 +100,9 @@ export const AREA_SYNONYMS: Record<string, string> = {
 const DROP_RE = /never mind|forget it|stop|not that|don't need|cancel that/i;
 const CANCEL_RE = /\bcancel\b/i;
 // "move it to 11" stays a correction; only "move my …" / "reschedule" starts a reschedule
-const RESCHEDULE_RE = /\breschedule\b|\bmove my\b/i; // "cancel that" is a drop (DROP_RE is checked first)
+const RESCHEDULE_RE = /\breschedule\b|\bmove my\b/i;
+// FR-6 asked for a provider's details — read before a pick, since its phrasing never picks a slot
+const DETAILS_RE = /\b(details|tell me (?:more )?about)\b/i; // "cancel that" is a drop (DROP_RE is checked first)
 const LIST_BOOKINGS_RE = /\b(show|list|see|view|what are|what's)\b[^.?!]*\bbookings?\b|^\s*my bookings\b/i;
 // § 2.5.5 rule 2: only a *plain* yes approves — the whole message is the decision word
 const PLAIN_YES = /^\s*(yes|yeah|yep|sure|confirm|approve|go ahead|book it|fine|ok|okay)[\s.,!]*$/i;
@@ -90,7 +117,8 @@ export const findArea = (text: string): { area: string | null; unknownArea: bool
     if (lower.includes(phrase)) return { area: canonical, unknownArea: false };
   }
   const guess = lower.match(/\b(?:in|near|at|around)\s+([a-z][a-z ]{2,20}?)(?:\s|,|\.|$)/);
-  if (guess) return { area: null, unknownArea: true, ...(guess[1] ? { guessed: guess[1].trim() } : {}) } as never;
+  if (guess)
+    return { area: null, unknownArea: true, ...(guess[1] ? { guessed: guess[1].trim() } : {}) } as never;
   return { area: null, unknownArea: false };
 };
 
@@ -114,18 +142,42 @@ const readDecisionWithChange = async (rest: string, clock: Clock): Promise<ReadR
   if (r.kind !== "workflow") return { kind: "unknown" };
   if (r.timeWindow || r.timeOutOfRange) {
     const after = /(?:after|not before)\s+\d/i.exec(rest);
-    return { kind: "correction", target: "time_window", text: rest, correctionText: after ? rest.slice(after.index) : rest, mergeTime: true };
+    return {
+      kind: "correction",
+      target: "time_window",
+      text: rest,
+      correctionText: after ? rest.slice(after.index) : rest,
+      mergeTime: true,
+    };
   }
   if (r.budget !== undefined) return { kind: "correction", target: "budget", text: rest, budget: r.budget };
   return r;
 };
 
-export const readUserMessage = async (text: string, clock: Clock, options?: OptionBlock[]): Promise<ReadResult> => {
+export const readUserMessage = async (
+  text: string,
+  clock: Clock,
+  options?: OptionBlock[],
+): Promise<ReadResult> => {
   if (DROP_RE.test(text)) return { kind: "drop" };
   if (PLAIN_YES.test(text)) return { kind: "decision", decision: "yes" };
   if (PLAIN_NO.test(text)) return { kind: "decision", decision: "no" };
   const lead = DECISION_LEAD.exec(text);
   if (lead) return readDecisionWithChange(text.slice(lead[0].length), clock);
+  if (DETAILS_RE.test(text)) {
+    let providerId: string | undefined;
+    if (options) {
+      const ordinal = /provider\s+(\d+)/i.exec(text);
+      if (ordinal) providerId = options[Number(ordinal[1]) - 1]?.provider.id;
+      if (!providerId) {
+        const lower = text.toLowerCase();
+        providerId = [...options]
+          .sort((a, b) => b.provider.name.length - a.provider.name.length)
+          .find((b) => lower.includes(b.provider.name.toLowerCase()))?.provider.id;
+      }
+    }
+    return { kind: "provider_details", ...(providerId ? { providerId } : {}) };
+  }
   if (CANCEL_RE.test(text)) return { kind: "cancel" };
   if (LIST_BOOKINGS_RE.test(text)) return { kind: "list_bookings" };
 
@@ -147,7 +199,11 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
       kind: "correction",
       target: "time_window",
       text,
-      correctionText: text.slice(afterBound ? text.toLowerCase().indexOf(afterBound[0].toLowerCase()) : (DAY_RE.exec(text)?.index ?? 0)),
+      correctionText: text.slice(
+        afterBound
+          ? text.toLowerCase().indexOf(afterBound[0].toLowerCase())
+          : (DAY_RE.exec(text)?.index ?? 0),
+      ),
       mergeTime: true,
     };
   }
@@ -164,7 +220,12 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
   const serviceInfo = serviceProbe;
   const areaInfo = findArea(text);
   const hasDetail =
-    serviceInfo.service !== null || serviceInfo.unknownService || areaInfo.area !== null || areaInfo.unknownArea || (windowProbe?.ok ?? false) || anyTime;
+    serviceInfo.service !== null ||
+    serviceInfo.unknownService ||
+    areaInfo.area !== null ||
+    areaInfo.unknownArea ||
+    (windowProbe?.ok ?? false) ||
+    anyTime;
   if (!hasDetail) return { kind: "unknown" };
 
   const service = serviceProbe.service;
@@ -190,7 +251,11 @@ export const readUserMessage = async (text: string, clock: Clock, options?: Opti
     ...(service ? { service } : {}),
     ...(area ? { area } : {}),
     ...(window ? { timeWindow: window } : {}),
-    ...(text.match(/\bany\s+budget|don'?t\s*care.*budget|no\s+budget/i) ? { budget: "any" as const } : budgetMatch ? { budget: budget(budgetMatch[1]!) } : {}),
+    ...(text.match(/\bany\s+budget|don'?t\s*care.*budget|no\s+budget/i)
+      ? { budget: "any" as const }
+      : budgetMatch
+        ? { budget: budget(budgetMatch[1]!) }
+        : {}),
   };
 };
 

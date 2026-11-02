@@ -393,11 +393,11 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U31 Provider details and injection defence
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/provider-details.flow.test.ts` (details reply leaves phase/approvals/state unchanged; details read resolves ordinal or name from shown options; every seeded injection kind flagged and powerless; trace `get_provider` with `suspectedInjection` true), `model-v1.test.ts` details reads, client `ProviderDetails.test.tsx` (label block, badge, review text never HTML) + OptionBlocks **Details** button. Runner: I-8 invariant on (pending approvals must equal the workflow's own selection/hold/target; used ones may be superseded by a re-pick/re-hold); `pick` falls back to stored candidates when a details reply replaced the last parts; `providerDetailsSuspicious` expect. Eval 4. Suite 262/262, client 25/25, evals 26/26. QA `/tmp/verify-U31/drive.txt`: Maruthi CleanCo's fake-approval review returned in a `provider_details` part, flagged in the part and the trace, no approval created, workflow still `book:choosing`.
 - **Depends on.** U18, U26.
 - **Covers.** MH-4, FR-6, § 2.5.7 rules 1–8, I-8.
 - **Build.** "tell me about provider 2" and a Details link call `get_provider`. A provider-details part with reviews in a "Reviews (from the provider, not checked)" block and the warning label. The read step never sees reviews. Client renders reviews as plain text with the label.
-- **Tests.** Each of the 5 injection kinds leaves intent, approvals and memory unchanged. RTL: the label renders and review text is not interpreted as HTML.
+- **Tests.** Each of the 5 injection kinds leaves intent, approvals and memory unchanged. RTL: the label renders and review text is not interpreted as HTML. (Memory has no table until U32; its half of I-8 lands there.)
 - **Evals.** 4. I-8 switches on.
 - **QA.** API drive of a provider with an injection review. The trace shows `suspected_injection: true`.
 - **You see.** Eval 4 passes, and no approval or memory row changed.

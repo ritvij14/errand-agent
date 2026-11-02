@@ -1,10 +1,18 @@
 import { useState } from "react";
-import { useConversation, useConversations, useCreateConversation, useDecideApproval, useSendMessage, useSignOut } from "../shared/queries.js";
+import {
+  useConversation,
+  useConversations,
+  useCreateConversation,
+  useDecideApproval,
+  useSendMessage,
+  useSignOut,
+} from "../shared/queries.js";
 import type { Message } from "../shared/api-client.js";
-import { isApprovalCard, isBookingsList, isOptionBlocks } from "../shared/parts.js";
+import { isApprovalCard, isBookingsList, isOptionBlocks, isProviderDetails } from "../shared/parts.js";
 import { OptionBlocks } from "../components/OptionBlocks.js";
 import { ApprovalCard } from "../components/ApprovalCard.js";
 import { BookingsList } from "../components/BookingsList.js";
+import { ProviderDetails } from "../components/ProviderDetails.js";
 
 // The chat page: conversation list + message view + composer (§ 2.4). Send is
 // disabled while a reply is pending (2.3: both sides block overlapping sends).
@@ -21,7 +29,10 @@ export function Chat() {
   const busy = sendMessage.isPending || decide.isPending || create.isPending || signOut.isPending;
   const messages = conversation.data?.messages ?? [];
   // the newest card on screen: a typed yes / no answers that card (§ 2.5.5 rule 1)
-  const shownCardId = messages.flatMap((m) => m.parts ?? []).filter(isApprovalCard).at(-1)?.approvalId;
+  const shownCardId = messages
+    .flatMap((m) => m.parts ?? [])
+    .filter(isApprovalCard)
+    .at(-1)?.approvalId;
 
   const send = () => {
     const text = draft.trim();
@@ -40,7 +51,11 @@ export function Chat() {
       </header>
       <div className="flex flex-1 gap-4 overflow-hidden">
         <aside className="w-48 shrink-0 overflow-y-auto">
-          <button className="mb-2 w-full rounded border border-neutral-300 px-2 py-1 text-sm" onClick={() => create.mutate()} disabled={create.isPending}>
+          <button
+            className="mb-2 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+            onClick={() => create.mutate()}
+            disabled={create.isPending}
+          >
             + New conversation
           </button>
           {(conversations.data ?? []).map((c) => (
@@ -57,15 +72,30 @@ export function Chat() {
         <main className="flex flex-1 flex-col overflow-hidden">
           <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-neutral-200 p-3">
             {messages.map((m: Message) => (
-              <div key={m.id} className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-neutral-900 text-white" : "bg-neutral-100"}`}>
+              <div
+                key={m.id}
+                className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-neutral-900 text-white" : "bg-neutral-100"}`}
+              >
                 <p className="whitespace-pre-wrap">{m.text}</p>
                 {m.parts?.map((part, i) =>
                   isOptionBlocks(part) ? (
-                    <OptionBlocks key={i} blocks={part.blocks} disabled={busy} onConfirm={(text) => sendMessage.mutate({ text })} />
+                    <OptionBlocks
+                      key={i}
+                      blocks={part.blocks}
+                      disabled={busy}
+                      onConfirm={(text) => sendMessage.mutate({ text })}
+                    />
                   ) : isApprovalCard(part) ? (
-                    <ApprovalCard key={i} card={part} disabled={busy} onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })} />
+                    <ApprovalCard
+                      key={i}
+                      card={part}
+                      disabled={busy}
+                      onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })}
+                    />
                   ) : isBookingsList(part) ? (
                     <BookingsList key={i} part={part} />
+                  ) : isProviderDetails(part) ? (
+                    <ProviderDetails key={i} part={part} />
                   ) : null,
                 )}
               </div>
@@ -80,7 +110,11 @@ export function Chat() {
               placeholder='e.g. "Find a plumber this week in HSR Layout"'
               disabled={!selected || busy}
             />
-            <button className="rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50" onClick={send} disabled={!selected || busy}>
+            <button
+              className="rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+              onClick={send}
+              disabled={!selected || busy}
+            >
               {busy ? "…" : "Send"}
             </button>
           </footer>

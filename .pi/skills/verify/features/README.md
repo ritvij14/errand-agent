@@ -8,3 +8,4 @@ One file per user-facing feature: what it is, how to drive it (HTTP through Vite
 | Cancel: identify → approve → cancelled | [cancel.md](cancel.md) |
 | Reschedule: identify → new time → move | [reschedule.md](reschedule.md) |
 | Drop / task switch | [task-switch.md](task-switch.md) |
+| Provider details / injection | [injection.md](injection.md) |

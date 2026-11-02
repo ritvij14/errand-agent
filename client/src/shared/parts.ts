@@ -36,6 +36,15 @@ export type BookingsListPart = {
 export const isBookingsList = (part: unknown): part is BookingsListPart =>
   (part as { type?: string } | null)?.type === "bookings_list";
 
+export type ProviderDetailsPart = {
+  type: "provider_details";
+  provider: { id: string; name: string; service: string; price: number; rating: number };
+  reviews: { text: string; suspectedInjection?: boolean }[];
+};
+
+export const isProviderDetails = (part: unknown): part is ProviderDetailsPart =>
+  (part as { type?: string } | null)?.type === "provider_details";
+
 export const isOptionBlocks = (part: unknown): part is OptionBlocksPart =>
   (part as { type?: string } | null)?.type === "option_blocks";
 
