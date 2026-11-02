@@ -75,6 +75,8 @@ export function Chat() {
 
 // Structural parts (option blocks, approval cards…) — added in later units (U26).
 // The placeholder keeps the renderer's shape without speculative UI.
-function RenderedPart(_props: { part: unknown }) {
+function RenderedPart({ part }: { part: unknown }) {
+  // structural parts arrive with later units (U26); keep an id for the key today
+  void part;
   return null;
 }

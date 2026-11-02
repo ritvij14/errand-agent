@@ -4,4 +4,9 @@ node_modules/
 dist/
 .env
 *.db
-*.db-journal.pi/*.log
+*.db-journal
+*.db-wal
+*.db-shm
+.pi/*.log
+.vitest/
+server/data/

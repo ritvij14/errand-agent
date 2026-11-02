@@ -9,9 +9,24 @@ export interface ToolResultEvent {
   isError: boolean;
 }
 
-export interface AgentSettledEvent {
-  type: "agent_settled";
-  aborted?: boolean;
+export interface BeforeAgentStartEvent {
+  type: "before_agent_start";
+}
+
+export interface AgentBeforeSettleEvent {
+  type: "agent_before_settle";
+  outcome: "completed" | "aborted" | "error";
+  continue: boolean;
+}
+
+export interface BoundaryResult {
+  entries?: {
+    type: "custom_message";
+    customType: string;
+    content: string;
+    display: boolean;
+  }[];
+  continue?: boolean;
 }
 
 export interface ExtensionContext {
@@ -22,14 +37,14 @@ export interface ExtensionContext {
   };
 }
 
-export interface ExecResult {
-  code: number;
-  stdout?: string;
-  stderr?: string;
-}
-
 export interface ExtensionAPI {
   on(event: "tool_result", handler: (event: ToolResultEvent, ctx: ExtensionContext) => unknown): void;
-  on(event: "agent_settled", handler: (event: AgentSettledEvent, ctx: ExtensionContext) => unknown): void;
-  exec(command: string, args: string[]): Promise<ExecResult>;
+  on(
+    event: "before_agent_start",
+    handler: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => unknown,
+  ): void;
+  on(
+    event: "agent_before_settle",
+    handler: (event: AgentBeforeSettleEvent, ctx: ExtensionContext) => BoundaryResult | undefined,
+  ): void;
 }
