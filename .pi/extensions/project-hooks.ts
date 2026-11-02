@@ -1,3 +1,4 @@
+/// <reference path="./pi-coding-agent.d.ts" />
 import * as fs from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
