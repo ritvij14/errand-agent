@@ -15,4 +15,16 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       { step: "expect", replyContains: "plumber" },
     ],
   },
+  "2": {
+    id: "2",
+    name: "Only missing details asked; 'any budget' never asked again",
+    description: "MH-1: the ask covers exactly the missing required details; an optional 'any budget' is stored and never asked again.",
+    seed: "eval-seed",
+    steps: [
+      { step: "say", text: "I need a plumber, any budget" },
+      { step: "expect", replyContains: "which area and when", replyNotContains: "budget" },
+      { step: "say", text: "hsr layout mornings only" },
+      { step: "expect", phase: "searching", outcome: "completed" },
+    ],
+  },
 };

@@ -62,11 +62,11 @@ const scanQualifiers = (text: string): { earliest: string | null; latest: string
     earliest = earliest ?? "17:00";
     cut(remaining.match(/\b(tonight|this evening)\b/i));
   }
-  if (/\bmornings?\s*only\b/i.test(remaining)) {
+  if (/\bmornings?(\s*only)?\b/i.test(remaining)) {
     latest = "12:00";
-    cut(remaining.match(/,?\s*\bmornings?\s*only\b/i));
+    cut(remaining.match(/,?\s*\bmornings?(\s*only)?\b/i));
   }
-  if (/\banytime\b|\bweather\b/i.test(remaining) || /\bwhenever\b/i.test(remaining)) {
+  if (/\banytime\b|\bwhenever\b/i.test(remaining)) {
     remaining = " ";
   }
   if (/\bthis week\b/i.test(remaining)) {

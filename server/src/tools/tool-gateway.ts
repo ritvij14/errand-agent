@@ -2,8 +2,9 @@ import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
 import { startTrace, type Trace } from "../tracing/index.js";
 import type { ForcedQueue, WriteOpts } from "./write-tools.js";
-import { cancel, getBookingStatus, holdSlot, reschedule, book } from "./write-tools.js";
+import { getBookingStatus, holdSlot } from "./write-tools.js";
 import { getProvider, listBookings, searchProviders, type BookingRecord, type ProviderSummary, type ToolResult } from "./read-tools.js";
+
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
 
 // The tool gateway (§ 2.5.4): the agent's ONLY way to the provider API. Bound to one

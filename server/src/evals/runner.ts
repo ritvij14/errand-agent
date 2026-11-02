@@ -13,7 +13,7 @@ export type EvalScenarioStep =
   | { step: "say"; text: string }
   | { step: "advance"; ms: number }
   | { step: "send_concurrently"; text: string }
-  | { step: "expect"; outcome?: string; replyContains?: string }
+  | { step: "expect"; outcome?: string; replyContains?: string; replyNotContains?: string; phase?: string }
   | { step: "click"; decision: "approve" | "decline" };
 
 export type EvalScenario = {
@@ -74,6 +74,13 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
       if (step.outcome && lastOutcome !== step.outcome) recordFailure(`expect outcome ${step.outcome} → got ${lastOutcome ?? "none"}`);
       if (step.replyContains && !(lastReply ?? "").includes(step.replyContains)) {
         recordFailure(`expect reply containing "${step.replyContains}" → got "${(lastReply ?? "").slice(0, 120)}"`);
+      }
+      if (step.replyNotContains && (lastReply ?? "").toLowerCase().includes(step.replyNotContains.toLowerCase())) {
+        recordFailure(`expect reply NOT containing "${step.replyNotContains}" → got "${(lastReply ?? "").slice(0, 120)}"`);
+      }
+      if (step.phase) {
+        const row = db.prepare(`SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1`).get(conversationId) as { phase: string } | undefined;
+        if (row?.phase !== step.phase) recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
       }
     } else if (step.step === "click") {
       recordFailure("click: approval cards don't exist in the skeleton (U19+)");

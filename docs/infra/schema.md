@@ -318,4 +318,5 @@ Numbered SQL files in `server/migrations/`, applied in order on start; applied v
 | 002_auth       | 2026-11-02 | `user`, `auth_session` (Argon2id, hashed tokens) |
 | 003_trace_events | 2026-11-02 | `trace_event` (per-run event list, allow-listed data) |
 | 004_conversations | 2026-11-02 | `conversation`, `run`, `message` (+client_message_id unique, R2) |
-| _later_        | —    | Planned: `005_workflow` (approval/operation/memory migrations follow their units) |
+| 005_workflow   | 2026-11-02 | `workflow` (facts JSON, candidates, pending_question, version; one active per conversation) |
+| _later_        | —    | approval / operation / memory migrations follow their units |

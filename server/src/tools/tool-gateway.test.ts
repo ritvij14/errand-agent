@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createClock } from "../shared/clock.js";
-import { createTestDb, type TestDb } from "../shared/test-db.js";
+import { createTestDb } from "../shared/test-db.js";
 import { seedDemoUsers } from "../auth/index.js";
 import { seedMockWorld, freeSlots, slotWindow } from "./mock-world.js";
 import { createMockSettings, DEFAULT_SEED } from "./settings.js";

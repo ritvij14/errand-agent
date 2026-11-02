@@ -1,6 +1,7 @@
 import type { Db } from "../shared/db.js";
 import type { Clock } from "../shared/clock.js";
-import { startTrace, readTrace } from "../tracing/index.js";
+import { startTrace, readTrace, type Trace } from "../tracing/index.js";
+import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel } from "../agent/index.js";
 import { conversationRepo, type Conversation, type Run } from "./conversations.repo.js";
 
@@ -26,6 +27,7 @@ const openWorkflows = new Set<string>();
 export const createConversationService = (deps: ConversationsDeps) => {
   const { db, clock, model } = deps;
   const repo = conversationRepo(db);
+  const workflowStore = createConversationWorkflow(db, clock, model);
 
   const toReply = (run: Run, message: { id: string; text: string; parts: unknown[] }): Reply => ({
     runId: run.id,
@@ -105,26 +107,20 @@ export const createConversationService = (deps: ConversationsDeps) => {
       // save all messages and state as they are produced (NFR-5: state before tool calls)
       repo.addMessage(conversationId, run.id, "user", text, [], clock.now().getTime(), clientMessageId);
       try {
-        // read (model call 1)
-        const read = await model.read({ text, waitingFor: "nothing (skeleton)" });
-        trace.record("model_call", { job: "read", input: text, output: read });
-        // apply — the skeleton only knows NOT_UNDERSTOOD (every message is unknown)
-        let outcome: string;
-        let replyText: string;
-        if (read.kind === "unknown") {
-          outcome = "completed";
-          // write (model call 2)
-          replyText = await model.write({ purpose: "help", state: {} });
-          trace.record("model_call", { job: "write", output: replyText });
-        } else {
-          outcome = "unknown_error";
-          replyText = "Something went wrong on our side.";
-          trace.record("model_call", { job: "write", output: replyText });
-        }
+        // read (model call 1) — the workflow store applies and answers (U17+)
+        const runTrace: Trace = trace;
+        workflowStore.useTrace(runTrace);
+        const outcome: ApplyOutcome = await workflowStore.applyUserText(userId, conversationId, text);
+        workflowStore.useTrace(undefined);
+        const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));
+        trace.record("model_call", { job: "read", input: text, output: outcome.code ?? "applied" });
+        trace.record("model_call", { job: "write", output: replyText });
         const endedAt = clock.now().getTime();
-        repo.finishRun(run.id, outcome, endedAt, 2, 0);
-        trace.record("run_ended", { outcome, modelCalls: 2, toolCalls: 0 });
+        const runOutcome = outcome.code === "unknown_error" ? "error" : "completed"; // conversation-level errors complete the run (§2.5.3)
+        repo.finishRun(run.id, runOutcome, endedAt, 2, 0);
+        trace.record("run_ended", { outcome: runOutcome, modelCalls: 2, toolCalls: 0 });
         const saved = repo.addMessage(conversationId, run.id, "agent", replyText, [] as ReplyPart[], endedAt);
+        void runTrace;
         return { ok: true, reply: toReply(run, saved) };
       } finally {
         busyMarkers.delete(conversationId);

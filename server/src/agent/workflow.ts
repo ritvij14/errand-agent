@@ -1,0 +1,345 @@
+import { randomUUID } from "node:crypto";
+import type { Db } from "../shared/db.js";
+import type { Clock } from "../shared/clock.js";
+import type { AgentModel, ReadResult } from "./index.js";
+import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-window.js";
+import type { Trace } from "../tracing/index.js";
+
+// The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
+// Facts → candidates → selection → hold → approval build one on top of the other; a
+// correction overwrites one detail and its built-on state clears (rule 2). Saves are
+// optimistic: version must match the row's current version or the save is refused.
+
+export type Fact = { value: unknown; source: "user" | "memory"; updatedAt: number; memoryFactId?: string };
+export type Facts = {
+  service?: Fact;
+  area?: Fact;
+  time_window?: Fact & { value: TimeWindow | null };
+  budget?: Fact;
+  preferences?: Fact;
+};
+
+export type WorkflowRow = {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  intent: "book" | "reschedule" | "cancel" | null;
+  phase: string;
+  facts: Facts;
+  candidates: unknown[] | null;
+  target_booking_id: string | null;
+  pending_question: string | null;
+  version: number;
+  updatedAt: number;
+};
+
+export type ApplyOutcome = { phase: string; reply: string; facts: Facts; code?: string };
+
+const REQUIRED = ["service", "area", "time_window"] as const;
+
+export const SERVICE_NAMES: Record<string, string> = {
+  plumber: "plumbing",
+  electrician: "electrical work",
+  ac_servicing: "AC servicing",
+  deep_cleaning: "deep cleaning",
+  carpentry: "carpentry",
+};
+
+export const AREA_NAMES: Record<string, string> = {
+  indiranagar: "Indiranagar",
+  koramangala: "Koramangala",
+  hsr_layout: "HSR Layout",
+  jayanagar: "Jayanagar",
+  whitefield: "Whitefield",
+};
+
+type WorkflowRecord = {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  intent: string | null;
+  phase: string;
+  facts: string;
+  candidates: string | null;
+  target_booking_id: string | null;
+  pending_question: string | null;
+  version: number;
+  updated_at: number;
+};
+
+const decode = (row: WorkflowRecord): WorkflowRow => ({
+  id: row.id,
+  conversation_id: row.conversation_id,
+  user_id: row.user_id,
+  intent: (row.intent as WorkflowRow["intent"]) ?? null,
+  phase: row.phase,
+  facts: JSON.parse(row.facts || "{}") as Facts,
+  candidates: row.candidates ? (JSON.parse(row.candidates) as unknown[]) : null,
+  target_booking_id: row.target_booking_id,
+  pending_question: row.pending_question,
+  version: row.version,
+  updatedAt: row.updated_at,
+});
+
+// A time fact whose window has no bound at all counts as missing (it would search
+// everything); the "any" reading of time searches the full window instead.
+const timeFactHasBounds = (fact: Fact & { value: TimeWindow | null } | undefined): boolean => {
+  const w = fact?.value;
+  return !!w && (w.dateFrom !== null || w.dateTo !== null || w.earliest !== null || w.latest !== null);
+};
+
+export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel, initialTrace?: Trace) => {
+  // the run that is applying a message lends its trace (one trace per run, MH-7)
+  let trace: Trace | undefined = initialTrace;
+  const nowMs = () => clock.now().getTime();
+
+  const getActive = (conversationId: string): WorkflowRow | undefined => {
+    const row = db
+      .prepare(`SELECT * FROM workflow WHERE conversation_id = ? AND phase NOT IN ('done','failed','abandoned') ORDER BY updated_at DESC LIMIT 1`)
+      .get(conversationId) as WorkflowRecord | undefined;
+    return row ? decode(row) : undefined;
+  };
+
+  const fact = (key: keyof Facts, value: unknown): Fact => ({ value, source: "user", updatedAt: nowMs() }) as Fact;
+
+  /** Collect or advance: with every required fact present the phase is `searching`. */
+  const nextPhase = (facts: Facts): string => {
+    const missing = REQUIRED.some((key) => !facts[key] || (key === "time_window" && !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null })));
+    return missing ? "collecting" : "searching";
+  };
+
+  const missingFacts = (facts: Facts): (typeof REQUIRED)[number][] =>
+    REQUIRED.filter((key) => {
+      const f = facts[key];
+      if (!f) return true;
+      if (key === "time_window") return !timeFactHasBounds(facts.time_window as Fact & { value: TimeWindow | null });
+      return f.value === undefined;
+    });
+
+  /** Save with optimistic concurrency: the version must match the row’s current one (or -1 to insert). */
+  const saveWorkflow = (conversationId: string, expectedVersion: number, mutate: (w: WorkflowRow) => WorkflowRow): { ok: boolean; workflow?: WorkflowRow } => {
+    const existing = getActive(conversationId);
+    if (expectedVersion !== -1 && (!existing || existing.version !== expectedVersion)) return { ok: false };
+    if (expectedVersion === -1) {
+      if (existing) return { ok: false }; // only one active workflow per conversation
+      const w = mutate({
+        id: randomUUID(), conversation_id: conversationId, user_id: "", intent: null,
+        phase: "collecting", facts: {}, candidates: null, target_booking_id: null,
+        pending_question: null, version: 0, updatedAt: nowMs(),
+      } as WorkflowRow);
+      try {
+        db.prepare(
+          `INSERT INTO workflow (id, conversation_id, user_id, intent, phase, facts, candidates, target_booking_id, pending_question, version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        ).run(w.id, conversationId, w.user_id, w.intent, w.phase, JSON.stringify(w.facts), w.candidates ? JSON.stringify(w.candidates) : null, w.target_booking_id, w.pending_question, nowMs(), nowMs());
+        return { ok: true, workflow: getActive(conversationId) };
+      } catch {
+        return { ok: false }; // concurrent insert lost the unique-index race
+      }
+    }
+    const next = mutate({ ...existing! });
+    next.updatedAt = nowMs();
+    const result = db
+      .prepare(
+        `UPDATE workflow SET intent = ?, phase = ?, facts = ?, candidates = ?, target_booking_id = ?, pending_question = ?, version = version + 1, updated_at = ?
+         WHERE conversation_id = ? AND version = ?`,
+      )
+      .run(next.intent, next.phase, JSON.stringify(next.facts), next.candidates ? JSON.stringify(next.candidates) : null, next.target_booking_id, next.pending_question, nowMs(), conversationId, expectedVersion);
+    if (result.changes === 0) return { ok: false };
+    if (existing!.phase !== next.phase) trace?.record("state_transition", { fromPhase: existing!.phase, toPhase: next.phase, reason: "apply" });
+    return { ok: true, workflow: getActive(conversationId) };
+  };
+
+  return {
+    getActiveWorkflow: getActive,
+    currentVersion: (conversationId: string): number => getActive(conversationId)?.version ?? -1,
+    saveWorkflow,
+    useTrace: (t: Trace | undefined): void => {
+      trace = t;
+    },
+
+    /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
+    applyUserText: async (userId: string, conversationId: string, text: string): Promise<ApplyOutcome> => {
+      const read: ReadResult = await model.read({ text, waitingFor: getActive(conversationId)?.phase ?? "nothing", clock });
+
+      if (read.kind === "unknown" || read.kind === "decision") {
+        // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
+        const phase = getActive(conversationId)?.phase ?? "collecting";
+        return { phase, reply: "", code: "NOT_UNDERSTOOD", facts: getActive(conversationId)?.facts ?? ({} as Facts) };
+      }
+
+      if (read.kind === "drop") {
+        const current = getActive(conversationId);
+        if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+        const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, phase: "abandoned", pending_question: null }));
+        trace?.record("state_transition", { fromPhase: current.phase, toPhase: "abandoned", reason: "user dropped" });
+        return { phase: "abandoned", reply: "Okay, dropped. Nothing was booked.", facts: {} as Facts, code: saved.ok ? undefined : "unknown_error" };
+      }
+
+      const current = getActive(conversationId);
+
+      if (current) {
+        if (read.kind === "workflow" && read.intent && read.intent !== current.intent && current.phase !== "collecting") {
+          // FR-15: switching tasks on an unfinished workflow asks first (U30); until
+          // then record that the intent stayed
+        }
+        return applyToWorkflow(conversationId, current, read);
+      }
+
+      const intent = read.kind === "workflow" ? read.intent : undefined;
+      if (!intent) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+      const flags = read as { unknownService?: boolean; unknownArea?: boolean; timeOutOfRange?: boolean };
+      if (flags.unknownService)
+        return { phase: "collecting", reply: "I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?", code: "UNKNOWN_SERVICE", facts: {} as Facts };
+      if (flags.unknownArea)
+        return { phase: "collecting", reply: "I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?", code: "UNKNOWN_AREA", facts: {} as Facts };
+      const facts: Facts = {};
+      const values = read as { service?: string | null; area?: string | null; budget?: number | "any"; preferences?: string | null; timeWindow?: TimeWindow };
+      if (values.service) facts.service = fact("service", values.service);
+      if (values.area) facts.area = fact("area", values.area);
+      if (values.timeWindow) facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
+      if (values.budget !== undefined) facts.budget = fact("budget", values.budget);
+      if (values.preferences) facts.preferences = fact("preferences", values.preferences);
+
+      const saved = saveWorkflow(conversationId, -1, (w) => ({ ...w, user_id: userId, intent, facts: { ...w.facts, ...facts }, phase: nextPhase(w.facts) }));
+      if (!saved.ok || !saved.workflow) return { phase: "collecting", reply: "", code: "unknown_error", facts: {} as Facts };
+      for (const [key, f] of Object.entries(saved.workflow.facts)) {
+        trace?.record("fact_changed", { key, oldValue: null, newValue: (f as Fact).value, source: "user", isCorrection: false });
+      }
+      trace?.record("state_transition", { fromPhase: "none", toPhase: saved.workflow.phase, reason: "workflow started" });
+      return flags.timeOutOfRange
+        ? { phase: saved.workflow.phase, reply: "I can only book within the next 14 days — that time is outside it. Tell me another day.", facts: saved.workflow.facts, code: TIME_OUT_OF_RANGE }
+        : replyFor(saved.workflow);
+    },
+
+    /** Save search results (U18 calls the tool; this stores them on the workflow). */
+    setCandidates: (conversationId: string, candidates: unknown[]): WorkflowRow | undefined => {
+      const current = getActive(conversationId);
+      if (!current) return undefined;
+      return saveWorkflow(conversationId, current.version, (w) => ({ ...w, candidates })).workflow;
+    },
+  };
+
+  function applyToWorkflow(conversationId: string, current: WorkflowRow, read: ReadResult): ApplyOutcome {
+    const facts: Facts = { ...current.facts };
+    let errorCode: string | undefined;
+    let factChanged = false;
+    let timeChanged = false;
+
+    if (read.kind === "correction" && read.target === "time_window" && read.mergeTime) {
+      const known = facts.time_window?.value;
+      if (known) {
+        const merged = mergeCorrection(known, read.correctionText ?? read.text, clock);
+        if (merged.ok) {
+          facts.time_window = fact("time_window", merged.data) as Fact & { value: TimeWindow };
+          timeChanged = true;
+        } else {
+          errorCode = merged.error;
+        }
+      } else {
+        // no window yet — treat the correction as a new window statement
+        const parsed = mergeCorrection({ dateFrom: null, dateTo: null, earliest: null, latest: null }, read.correctionText ?? read.text, clock);
+        if (parsed.ok) {
+          facts.time_window = fact("time_window", parsed.data) as Fact & { value: TimeWindow };
+          timeChanged = true;
+        } else {
+          errorCode = parsed.error;
+        }
+      }
+    }
+
+    const values = (read.kind === "workflow" || read.kind === "correction" ? read : read) as {
+      intent?: WorkflowRow["intent"] | undefined;
+      service?: string | null;
+      area?: string | null;
+      budget?: number | "any";
+      timeWindow?: TimeWindow | undefined;
+    };
+
+    if (values.timeWindow && !(read.kind === "correction" && read.mergeTime)) {
+      facts.time_window = fact("time_window", values.timeWindow) as Fact & { value: TimeWindow };
+      timeChanged = true;
+    }
+    if (values.service) {
+      facts.service = fact("service", values.service);
+      factChanged = true;
+    }
+    if (values.area) {
+      facts.area = fact("area", values.area);
+      factChanged = true;
+    }
+    if (values.budget !== undefined) {
+      facts.budget = fact("budget", values.budget);
+      factChanged = true;
+    }
+
+    if (errorCode) {
+      // out-of-range etc.: nothing saved; the user is asked to correct again
+      return replyFor(current, errorCode);
+    }
+
+    const phase = phaseAfterChange(current, factChanged || timeChanged, facts);
+    const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, facts, phase, candidates: factChanged || timeChanged ? null : w.candidates, intent: (values.intent as WorkflowRow["intent"]) ?? w.intent }));
+    if (!saved.ok || !saved.workflow) return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
+
+    for (const key of ["service", "area", "time_window", "budget", "preferences"] as (keyof Facts)[]) {
+      const before = (current.facts as Facts)[key];
+      const after = saved.workflow.facts[key];
+      if (JSON.stringify(before) !== JSON.stringify(after) && after) {
+        trace?.record("fact_changed", {
+          key,
+          oldValue: before ? before.value : null,
+          newValue: after.value,
+          source: "user",
+          isCorrection: read.kind === "correction" || Object.keys(current.facts).length > 0,
+        });
+      }
+    }
+    return replyFor(saved.workflow);
+  }
+
+  /** Rule 2: a changed fact rebuilds what was made from it (candidates and later). */
+  function phaseAfterChange(current: WorkflowRow, changed: boolean, facts: Facts): string {
+    const next = nextPhase(facts);
+    if (!changed) return next;
+    if (next === "searching") return "searching";
+    return next;
+  }
+
+  function replyFor(w: WorkflowRow, errorCode?: string): ApplyOutcome {
+    if (errorCode === "UNKNOWN_SERVICE") {
+      return { phase: w.phase, reply: `I book these services: plumbing, electrical work, AC servicing, deep cleaning, carpentry. Which one?`, facts: w.facts, code: errorCode };
+    }
+    if (errorCode === "UNKNOWN_AREA") {
+      return { phase: w.phase, reply: `I book in Indiranagar, Koramangala, HSR Layout, Jayanagar and Whitefield — which one?`, facts: w.facts, code: errorCode };
+    }
+    const area = typeof w.facts.area?.value === "string" ? w.facts.area.value : null;
+    const service = typeof w.facts.service?.value === "string" ? w.facts.service.value : null;
+
+    if (errorCode === TIME_OUT_OF_RANGE) {
+      const inArea = area ? ` in ${AREA_NAMES[area] ?? area}` : "";
+      return {
+        phase: w.phase,
+        reply: `I can only book within the next 14 days${inArea} and that time is in the past — tell me another time.`,
+        facts: w.facts,
+        code: TIME_OUT_OF_RANGE,
+      };
+    }
+
+    const missing = missingFacts(w.facts);
+    if (w.phase === "collecting" && missing.length > 0) {
+      const asks = missing.map((key) => (key === "area" ? "which area" : key === "time_window" ? "when" : `which ${key}`));
+      const known = Object.entries(w.facts)
+        .filter(([key]) => key !== "time_window" && w.facts[key as keyof Facts] !== undefined)
+        .map(([, v]) => (typeof (v as Fact).value === "string" ? ((v as Fact).value as string) : null))
+        .filter((s) => s !== null);
+      const subject = known.length > 0 ? known.join(", ") : "that";
+      return { phase: "collecting", reply: `${subject ? `${subject} — ` : ""}${asks.join(" and ")}?`, facts: w.facts, code: errorCode };
+    }
+    if (w.phase === "searching") {
+      // U18 replaces this with the real search result
+      return { phase: "searching", reply: `Looking for ${SERVICE_NAMES[service ?? ""] ?? "that"} in ${AREA_NAMES[area ?? ""] ?? "your area"}…`, facts: w.facts, code: errorCode };
+    }
+    return { phase: w.phase, reply: "", facts: w.facts, code: errorCode };
+  }
+};

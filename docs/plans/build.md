@@ -225,7 +225,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U17 Collect details: ask only what is missing
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 18 new tests (V-1 phrase table `agent/model-v1.test.ts`, collecting/cascade/version/trace `agent/workflow.test.ts`; suite 130/130). Eval 2 passes (table 2/2). QA `/tmp/verify-U17/drive.txt`: "I need a plumber" → one question for area and time → answer → `searching`, budget never asked. Migration `005_workflow.sql`.
 - **Depends on.** U13, U16.
 - **Covers.** MH-1, FR-7, FR-8, § 2.5.2 rules 1–2, V-1, R9.
 - **Build.** Workflow record with facts, version check and pending question. Scripted model reading intent, service, area, budget, `any`, preferences and corrections. The `collecting` phase asks once for every missing required detail. A correction overwrites one fact and clears only what was built from it. `UNKNOWN_SERVICE`, `UNKNOWN_AREA`, `TIME_OUT_OF_RANGE` replies. `fact_changed` and `state_transition` trace events.
