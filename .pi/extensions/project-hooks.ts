@@ -1,6 +1,58 @@
-import type { ExtensionAPI } from "./extension-api.js";
 import * as fs from "node:fs";
 import { join } from "node:path";
+
+// Local declarations for the subset of the pi extension API this extension uses.
+// They are inlined because pi loads every file in .pi/extensions/ as an extension;
+// a separate type-only file here exports nothing at runtime and fails startup. The
+// real declarations live in the globally installed @earendil-works/pi-coding-agent,
+// intentionally not a project dependency.
+export interface ToolResultEvent {
+  type: "tool_result";
+  toolName: string;
+  toolCallId: string;
+  input: Record<string, unknown>;
+  isError: boolean;
+}
+
+export interface BeforeAgentStartEvent {
+  type: "before_agent_start";
+}
+
+export interface AgentBeforeSettleEvent {
+  type: "agent_before_settle";
+  outcome: "completed" | "aborted" | "error";
+  continue: boolean;
+}
+
+export interface BoundaryResult {
+  entries?: {
+    type: "custom_message";
+    customType: string;
+    content: string;
+    display: boolean;
+  }[];
+  continue?: boolean;
+}
+
+export interface ExtensionContext {
+  hasUI: boolean;
+  cwd: string;
+  ui: {
+    notify(message: string, style?: "info" | "warning" | "error"): void;
+  };
+}
+
+export interface ExtensionAPI {
+  on(event: "tool_result", handler: (event: ToolResultEvent, ctx: ExtensionContext) => unknown): void;
+  on(
+    event: "before_agent_start",
+    handler: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => unknown,
+  ): void;
+  on(
+    event: "agent_before_settle",
+    handler: (event: AgentBeforeSettleEvent, ctx: ExtensionContext) => BoundaryResult | undefined,
+  ): void;
+}
 
 const FLAG_FILE = ".pi/session-changed";
 const WRAP_UP_PROMPT = ".pi/prompts/wrap-up.md";
