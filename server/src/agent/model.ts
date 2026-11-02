@@ -1,5 +1,6 @@
 import { parseTimeWindow, type TimeWindow } from "./time-window.js";
 import type { Clock } from "../shared/clock.js";
+import type { OptionBlock } from "./options.js";
 
 // The scripted model (ADR-002, V-1 phrase table): pattern code that turns the user's
 // text into labelled values. Never writes prose for the agent's decisions — the state
@@ -10,7 +11,33 @@ export type ReadResult =
   | { kind: "correction"; target: "time_window" | "budget" | "area" | "service"; text: string; correctionText?: string; mergeTime?: boolean; budget?: number | "any" }
   | { kind: "drop" }
   | { kind: "decision"; decision: "yes" | "no" }
+  | { kind: "pick"; providerId: string; slot: string }
+  | { kind: "pick_unclear" }
   | { kind: "unknown" };
+
+const VAGUE_PICK_RE = /\b(first|second|third|fourth|fifth|last|that|this|other) one\b/i;
+
+/**
+ * A pick names a shown provider (FR-9, ADR-007); the time narrows its slots to one.
+ * @remarks Returns undefined when the text names no shown provider, so corrections
+ * and new requests read normally while options are on screen.
+ */
+const readPick = (text: string, options: OptionBlock[], clock: Clock): ReadResult | undefined => {
+  const lower = text.toLowerCase();
+  const block = [...options]
+    .sort((a, b) => b.provider.name.length - a.provider.name.length)
+    .find((b) => lower.includes(b.provider.name.toLowerCase()));
+  if (!block) return undefined;
+  const rest = lower.replace(block.provider.name.toLowerCase(), " ");
+  const parsed = parseTimeWindow(rest, clock);
+  const w = parsed.ok ? parsed.data : null;
+  const matching = block.slots.filter((s) => {
+    const day = s.start.slice(0, 10);
+    const time = s.start.slice(11, 16);
+    return (!w?.dateFrom || (day >= w.dateFrom && day <= (w.dateTo ?? w.dateFrom))) && (!w?.earliest || time === w.earliest);
+  });
+  return matching.length === 1 ? { kind: "pick", providerId: block.provider.id, slot: matching[0]!.start } : { kind: "pick_unclear" };
+};
 
 export const SERVICE_SYNONYMS: Record<string, string> = {
   plumber: "plumber",
@@ -65,8 +92,11 @@ export const findService = (text: string): { service: string | null; unknownServ
   return { service: null, unknownService: false };
 };
 
-export const readUserMessage = async (text: string, clock: Clock): Promise<ReadResult> => {
+export const readUserMessage = async (text: string, clock: Clock, options?: OptionBlock[]): Promise<ReadResult> => {
   if (DROP_RE.test(text)) return { kind: "drop" };
+  const pick = options ? readPick(text, options, clock) : undefined;
+  if (pick) return pick;
+  if (VAGUE_PICK_RE.test(text)) return { kind: "pick_unclear" };
 
   // corrections carry content: the trigger words, or a decision word with a change
   const DAY_RE = /\b(saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/i;

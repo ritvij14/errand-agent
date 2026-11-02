@@ -113,7 +113,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
       try {
         // read (model call 1) — the workflow store applies and answers (U17+)
         const gateway = createToolGateway({ db, clock, settings: mockSettings, forced, seed: deps.mock?.seed ?? DEFAULT_SEED, userId, trace });
-        workflowStore.useRun({ trace, search: gateway.searchProviders });
+        workflowStore.useRun({ trace, search: gateway.searchProviders, hold: gateway.holdSlot });
         const outcome: ApplyOutcome = await workflowStore.applyUserText(userId, conversationId, text).finally(() => workflowStore.useRun(undefined));
         const toolCalls = gateway.toolCallsUsed();
         const replyText = outcome.reply || (await model.write({ purpose: outcome.code ?? "help", state: {} }));

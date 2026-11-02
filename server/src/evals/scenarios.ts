@@ -50,4 +50,17 @@ export const SCENARIOS: Record<string, EvalScenario> = {
       },
     ],
   },
+  "5": {
+    id: "5",
+    name: "Quoted price differs from search price → approval shows the quoted price",
+    description: "V-2: the slot is held before approval, so the card (drawn from the approval record) shows the hold's quoted price, not the search price.",
+    seed: "eval-seed",
+    steps: [
+      { step: "force", tool: "hold_slot", outcome: "price_changed" },
+      { step: "say", text: "plumber in HSR Layout this week, mornings only, under ₹1,500" },
+      { step: "expect", phase: "choosing" },
+      { step: "pick" },
+      { step: "expect", phase: "awaiting_approval", cardMatchesApproval: true, cardPriceDiffersFromSearch: true, replyContains: "quoted" },
+    ],
+  },
 };

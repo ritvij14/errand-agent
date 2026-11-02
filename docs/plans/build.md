@@ -249,7 +249,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U19 Pick, hold and the approval card
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `agent/pick.test.ts` (reader: every pickText reads back to its slot; typed and unclear picks), `agent/pick.flow.test.ts` (pick → hold → card = record; quoted price shown; `slot_unavailable` → back to choosing without the slot; unclear / `NOTHING_TO_PICK`), forced `hold_slot` outcomes in `write-tools.test.ts`; suite 159/159, evals 4/4 (eval 5 also proven to fail without the forced price change). QA `/tmp/verify-U19/drive.txt`: card's provider, slot and price equal the `approval` row and the `mock_hold` row; trace `hold_slot → approval_event:created`. Migration `006_approval.sql`.
 - **Depends on.** U18.
 - **Covers.** FR-9 picking, FR-10 (card), § 2.5.5 approval record and creation, V-2.
 - **Build.** A pick is a normal message (ADR-007): provider name plus day and time, matched against the shown candidates. Options carry every matching slot, no numbers or letters. "the second one" alone asks which, and with no list it is `NOTHING_TO_PICK`. `holding` calls `hold_slot`, and `slot_unavailable` goes back to `choosing`. `server/src/approval` creates a `pending` record from state, never from model text. The approval-card part is drawn from the record and shows the quoted price.

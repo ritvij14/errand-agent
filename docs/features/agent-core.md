@@ -25,3 +25,11 @@
 - Results are saved as the workflow's `candidates` (the blocks themselves), the phase moves to `choosing`, and the `option_blocks` reply part is drawn from those saved candidates — never from model text (§ 2.5.3 step 7).
 - `NO_MATCHES`: the phase stays `searching` with empty candidates, and the reply names the filter that emptied the list — time ("no free slot in that time") or budget ("the cheapest is ₹X"). Any later correction re-runs the search (rule 2).
 - The conversation runner builds one tool gateway per run (`ConversationsDeps.mock` sets the seed/settings; evals pass the scenario seed) and records the gateway's call count as the run's `tool_calls`.
+
+## Pick and hold (U19)
+
+- **Reading a pick** (`agent/model.ts` `readPick`): when the workflow is `choosing`, the read job carries the shown option blocks (`ReadJob.options`), the way a real model would be shown the list. A message naming a shown provider is a pick; the rest of the text is read as a time (`parseTimeWindow`) and must narrow that provider's slots to exactly one → `{ kind: "pick", providerId, slot }`, otherwise `pick_unclear`. "the second one" / "that one" is always `pick_unclear`. A message naming no shown provider reads normally, so corrections still work with options on screen.
+- **`pickText`** (`agent/options.ts`): every slot in `option_blocks` carries the message the page sends on Confirm — "Book {provider} on {Ddd D Mon} at {HH:MM}" (IST). Built next to the reader; `pick.test.ts` proves every pickText reads back to exactly its slot.
+- **The store re-checks** that the pick is among the saved candidates (never trusts the reader). Unclear → "Which slot?" with the options re-shown; no list (or a pick not on it) → `NOTHING_TO_PICK`.
+- **`holding`** runs straight away: `hold_slot` through the run's gateway (`RunTools.hold`). `slot_unavailable` (NFR-3: an answer, not a glitch) → that slot is removed from the candidates, back to `choosing` (or `searching` again if nothing is left). Success → see `docs/features/approval-gate.md`.
+- Rule 2 now also clears `selection` and `hold` when a fact changes. Voiding the open approval on a correction is U20.

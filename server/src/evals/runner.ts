@@ -4,7 +4,7 @@ import { createClock } from "../shared/clock.js";
 import { DEMO_USERS } from "../shared/demo-users.js";
 import { createConversationService } from "../conversations/index.js";
 import { scriptedModel } from "../agent/index.js";
-import { seedMockWorld } from "../tools/index.js";
+import { seedMockWorld, type ForcedQueue } from "../tools/index.js";
 
 // The scenario runner (§ 2.5.10): each scenario gets its own fresh database, a fixed
 // seed and clock, the scripted model, and a conversation bound to one user. The runner
@@ -14,6 +14,10 @@ export type EvalScenarioStep =
   | { step: "say"; text: string }
   | { step: "advance"; ms: number }
   | { step: "send_concurrently"; text: string }
+  /** queue a forced outcome for the next call of a mock tool (NFR-4) */
+  | { step: "force"; tool: string; outcome: string }
+  /** tap a slot and press Confirm: sends that slot's pickText, as the page does (ADR-007) */
+  | { step: "pick"; block?: number; slot?: number }
   | {
       step: "expect";
       outcome?: string;
@@ -24,6 +28,10 @@ export type EvalScenarioStep =
       facts?: Record<string, unknown>;
       /** the last reply's option blocks: present, and every provider price at most this */
       optionsPriceAtMost?: number;
+      /** the last reply's approval card equals the stored approval record (§ 2.5.5) */
+      cardMatchesApproval?: boolean;
+      /** the card's price differs from the picked option's search price (V-2) */
+      cardPriceDiffersFromSearch?: boolean;
     }
   | { step: "click"; decision: "approve" | "decline" };
 
@@ -53,6 +61,8 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
     .map((s) => {
       if (s.step === "say") return `say: "${s.text}"`;
       if (s.step === "advance") return `advance ${s.ms} ms`;
+      if (s.step === "force") return `force ${s.tool}=${s.outcome}`;
+      if (s.step === "pick") return `pick block ${s.block ?? 0} slot ${s.slot ?? 0}`;
       if (s.step === "expect") {
         return `expect ${JSON.stringify({ ...s, step: undefined })}`;
       }
@@ -63,26 +73,47 @@ export const describeSteps = (steps: EvalScenarioStep[]): string =>
 export const runScenario = async (db: Db, scenario: EvalScenario, userId: string): Promise<ScenarioResult> => {
   const clock = createClock({ now: new Date("2026-11-02T03:45:00Z") });
   seedMockWorld(db, { seed: scenario.seed, clock });
-  const service = createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed } });
+  const queued: { tool: string; outcome: string }[] = [];
+  const forced: ForcedQueue = {
+    take: (tool) => {
+      const i = queued.findIndex((q) => q.tool === tool);
+      return i === -1 ? undefined : { outcome: queued.splice(i, 1)[0]!.outcome };
+    },
+  };
+  const service = createConversationService({ db, clock, model: scriptedModel, mock: { seed: scenario.seed, forced } });
   const conversationId = service.createConversation(userId).id;
   let firstFailure: string | null = null;
   let lastReply: string | null = null;
   let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
+  let pickedSearchPrice: number | null = null;
+
+  const send = async (label: string, text: string, busyOk = false): Promise<void> => {
+    const result = await service.sendMessage(userId, conversationId, text, randomUUID());
+    if (!result.ok) {
+      if (busyOk && result.code === "CONVERSATION_BUSY") lastOutcome = result.code;
+      else recordFailure(`${label} "${text}" → ${result.code}: ${result.message}`);
+      return;
+    }
+    lastReply = result.reply.message.text;
+    lastParts = result.reply.message.parts;
+    lastOutcome = result.reply.outcome;
+  };
+  const partOf = (type: string) => lastParts.find((p) => p.type === type);
 
   for (const step of scenario.steps) {
     if (step.step === "say" || step.step === "send_concurrently") {
-      const result = await service.sendMessage(userId, conversationId, step.text, randomUUID());
-      if (!result.ok) {
-        if (step.step === "send_concurrently" && result.code === "CONVERSATION_BUSY") {
-          lastOutcome = result.code;
-        } else {
-          recordFailure(`${step.step} "${step.text}" → ${result.code}: ${result.message}`);
-        }
-      } else {
-        lastReply = result.reply.message.text;
-        lastParts = result.reply.message.parts;
-        lastOutcome = result.reply.outcome;
+      await send(step.step, step.text, step.step === "send_concurrently");
+    } else if (step.step === "force") {
+      queued.push({ tool: step.tool, outcome: step.outcome });
+    } else if (step.step === "pick") {
+      const blocks = partOf("option_blocks")?.blocks as { provider: { price: number }; slots: { pickText: string }[] }[] | undefined;
+      const block = blocks?.[step.block ?? 0];
+      const slot = block?.slots[step.slot ?? 0];
+      if (!block || !slot) recordFailure("pick → no such option on screen");
+      else {
+        pickedSearchPrice = block.provider.price;
+        await send("pick", slot.pickText);
       }
     } else if (step.step === "advance" as const) {
       clock.advanceMs((step as { ms: number }).ms);
@@ -109,6 +140,18 @@ export const runScenario = async (db: Db, scenario: EvalScenario, userId: string
         const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as { provider: { price: number } }[] | undefined;
         if (!blocks?.length) recordFailure("expect option blocks → none in the reply");
         else if (blocks.some((b) => b.provider.price > step.optionsPriceAtMost!)) recordFailure(`expect every option ≤ ₹${step.optionsPriceAtMost} → found pricier`);
+      }
+      if (step.cardMatchesApproval || step.cardPriceDiffersFromSearch) {
+        const card = partOf("approval_card") as { approvalId: string; action: string; provider: { id: string }; slot: string; price: number } | undefined;
+        const record = card
+          ? (db.prepare(`SELECT action, provider_id, slot, price FROM approval WHERE id = ?`).get(card.approvalId) as { action: string; provider_id: string; slot: string; price: number } | undefined)
+          : undefined;
+        if (!card || !record) recordFailure("expect approval card → none (or no approval record behind it)");
+        else if (step.cardMatchesApproval && (card.action !== record.action || card.provider.id !== record.provider_id || card.slot !== record.slot || card.price !== record.price)) {
+          recordFailure("expect card = approval record → they differ");
+        } else if (step.cardPriceDiffersFromSearch && card.price === pickedSearchPrice) {
+          recordFailure(`expect card price ≠ search price ₹${pickedSearchPrice} → same`);
+        }
       }
     } else if (step.step === "click") {
       recordFailure("click: approval cards don't exist in the skeleton (U19+)");

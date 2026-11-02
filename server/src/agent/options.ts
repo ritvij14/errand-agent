@@ -6,9 +6,24 @@ import type { TimeWindow } from "./time-window.js";
 // stores the blocks as candidates and the reply part is drawn from them.
 
 // No numbers or letters (ADR-007): a pick names the provider and the slot's time.
+// `pickText` is the message the page sends on Confirm — built here, next to the
+// reader that parses it, so the two can't drift apart.
 export type OptionBlock = {
   provider: { id: string; name: string; rating: number; price: number };
-  slots: { start: string }[];
+  slots: { start: string; pickText: string }[];
+};
+
+const DAY_LABEL = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Kolkata",
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+});
+
+/** "Book Deva Pipe Care on Tue 3 Nov at 10:00" — the slot's IST day and time. */
+export const pickText = (providerName: string, slot: string): string => {
+  const parts = Object.fromEntries(DAY_LABEL.formatToParts(new Date(slot)).map((p) => [p.type, p.value]));
+  return `Book ${providerName} on ${parts.weekday} ${parts.day} ${parts.month} at ${localTime(slot)}`;
 };
 
 export type OptionsResult =
@@ -57,7 +72,7 @@ export const buildOptions = (
     ok: true,
     blocks: ordered.map((x) => ({
       provider: { id: x.p.id, name: x.p.name, rating: x.p.rating, price: x.p.price },
-      slots: x.slots.map((start) => ({ start })),
+      slots: x.slots.map((start) => ({ start, pickText: pickText(x.p.name, start) })),
     })),
   };
 };

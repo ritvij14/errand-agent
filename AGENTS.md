@@ -275,7 +275,7 @@ Eval CLI (MH-8, deliverable 3) gets its own script as `server/evals/` takes shap
 | Agent core           | docs/features/agent-core.md         | MH-1, MH-5                            | Building |
 | Provider tool mocks  | docs/features/tool-mocks.md         | Fixed tool contract                   | Building |
 | Booking lifecycle    | docs/features/booking-lifecycle.md  | MH-3                                  | Planned |
-| Approval gate        | docs/features/approval-gate.md      | MH-2                                  | Planned |
+| Approval gate        | docs/features/approval-gate.md      | MH-2                                  | Building |
 | Memory & preferences | docs/features/memory-preferences.md | MH-6                                  | Planned |
 | Traces               | docs/features/traces.md             | MH-7                                  | Planned |
 | Eval suite           | docs/features/eval-suite.md         | MH-8, deliverable 3                   | Planned |

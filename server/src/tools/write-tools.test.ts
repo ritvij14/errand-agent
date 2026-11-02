@@ -223,3 +223,30 @@ const oneTool = (tool: string, outcome: string): ForcedQueue => {
     },
   };
 };
+describe("hold_slot forced outcomes (NFR-4, evals)", () => {
+  const queue = (outcome: string): ForcedQueue => {
+    let used = false;
+    return { take: (tool) => (tool === "hold_slot" && !used ? ((used = true), { outcome }) : undefined) };
+  };
+  const freeSlotOf = (db: Db, opts: WriteOpts) => {
+    const provider = firstProvider(db);
+    const days = slotWindow(opts.clock);
+    return { provider, slot: freeSlots(db, { seed: opts.seed, clock: opts.clock }, provider.id, days[2]!, days[13]!)[0]! };
+  };
+
+  it("price_changed quotes a price different from the search price (within ±15%)", () => {
+    const { db, opts } = world({ forced: queue("price_changed") });
+    const { provider, slot } = freeSlotOf(db, opts);
+    const result = holdSlot(db, opts, "u-tester", { providerId: provider.id, slot });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.quotedPrice).not.toBe(provider.price);
+    expect(Math.abs(result.data.quotedPrice - provider.price)).toBeLessThanOrEqual(Math.round(provider.price * 0.15));
+  });
+
+  it("slot_unavailable refuses a free slot and holds nothing", () => {
+    const { db, opts } = world({ forced: queue("slot_unavailable") });
+    const { provider, slot } = freeSlotOf(db, opts);
+    expect(holdSlot(db, opts, "u-tester", { providerId: provider.id, slot })).toEqual({ ok: false, error: "slot_unavailable", transient: false });
+    expect((db.prepare("SELECT COUNT(*) AS c FROM mock_hold").get() as { c: number }).c).toBe(0);
+  });
+});

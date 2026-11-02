@@ -28,11 +28,14 @@ describe("option blocks (FR-9)", () => {
       blocks: [
         {
           provider: { id: "early", name: "Provider early", rating: 4.5, price: 900 },
-          slots: [{ start: at("03", "09:00") }, { start: at("03", "14:00") }],
+          slots: [
+            { start: at("03", "09:00"), pickText: "Book Provider early on Tue 3 Nov at 09:00" },
+            { start: at("03", "14:00"), pickText: "Book Provider early on Tue 3 Nov at 14:00" },
+          ],
         },
         {
           provider: { id: "late", name: "Provider late", rating: 4.5, price: 900 },
-          slots: [{ start: at("05", "10:00") }],
+          slots: [{ start: at("05", "10:00"), pickText: "Book Provider late on Thu 5 Nov at 10:00" }],
         },
       ],
     });

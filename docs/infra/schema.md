@@ -102,15 +102,15 @@ CREATE TABLE workflow (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversation(id),
   user_id TEXT NOT NULL REFERENCES user(id),
-  intent TEXT NOT NULL CHECK (intent IN ('book','reschedule','cancel')),
+  intent TEXT CHECK (intent IN ('book','reschedule','cancel') OR intent IS NULL),
   phase TEXT NOT NULL,                      -- § 2.5.2 phases
-  facts TEXT NOT NULL DEFAULT '{}',         -- JSON: { key: { value, source, updated_at } }
+  facts TEXT NOT NULL DEFAULT '{}',         -- JSON: { key: { value, source, updatedAt } }
   target_booking_id TEXT,
-  candidates TEXT,                          -- JSON: last search results shown
-  selection TEXT,                           -- JSON: { provider_id, slot }
-  hold TEXT,                                -- JSON: { hold_id, expires_at, quoted_price }
-  approval_id TEXT,
-  operation_id TEXT,
+  candidates TEXT,                          -- JSON: the option blocks last shown
+  selection TEXT,                           -- JSON: { providerId, slot }   (006)
+  hold TEXT,                                -- JSON: { holdId, expiresAt, quotedPrice }   (006)
+  pending_question TEXT,                    -- JSON: the one explicit question (R9)
+  -- no approval_id column: the open approval is found by workflow_id (one_open_approval)
   version INTEGER NOT NULL DEFAULT 1,       -- a save with an old version is rejected
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -319,4 +319,5 @@ Numbered SQL files in `server/migrations/`, applied in order on start; applied v
 | 003_trace_events | 2026-11-02 | `trace_event` (per-run event list, allow-listed data) |
 | 004_conversations | 2026-11-02 | `conversation`, `run`, `message` (+client_message_id unique, R2) |
 | 005_workflow   | 2026-11-02 | `workflow` (facts JSON, candidates, pending_question, version; one active per conversation) |
-| _later_        | —    | approval / operation / memory migrations follow their units |
+| 006_approval   | 2026-11-02 | `workflow` + `selection`, `hold` (JSON); `approval` table + `one_open_approval` index |
+| _later_        | —    | operation / memory migrations follow their units |

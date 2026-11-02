@@ -6,6 +6,7 @@ import { mergeCorrection, TIME_OUT_OF_RANGE, type TimeWindow } from "./time-wind
 import type { Trace } from "../tracing/index.js";
 import type { ProviderSummary, ToolResult } from "../tools/index.js";
 import { buildOptions, searchRange, type OptionBlock } from "./options.js";
+import { approvalCardPart, approvalRepo } from "../approval/index.js";
 
 // The workflow store (§ 2.5.2): code drives; the model only reads and writes text.
 // Facts → candidates → selection → hold → approval build one on top of the other; a
@@ -29,19 +30,27 @@ export type WorkflowRow = {
   phase: string;
   facts: Facts;
   candidates: unknown[] | null;
+  selection: Selection | null;
+  hold: Hold | null;
   target_booking_id: string | null;
   pending_question: string | null;
   version: number;
   updatedAt: number;
 };
 
+export type Selection = { providerId: string; slot: string };
+export type Hold = { holdId: string; expiresAt: number; quotedPrice: number };
+
 export type ApplyOutcome = { phase: string; reply: string; facts: Facts; code?: string; parts?: Record<string, unknown>[] };
 
 /** `search_providers` through the run's tool gateway (the only way to the provider API). */
 export type SearchTool = (args: { service: string; area: string; from: string; to: string }) => ToolResult<{ providers: ProviderSummary[] }>;
 
+/** `hold_slot` through the run's tool gateway. */
+export type HoldTool = (args: Selection) => ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }>;
+
 /** What the run applying a message lends the store: its trace (MH-7) and its tools. */
-export type RunTools = { trace?: Trace; search?: SearchTool };
+export type RunTools = { trace?: Trace; search?: SearchTool; hold?: HoldTool };
 
 const REQUIRED = ["service", "area", "time_window"] as const;
 
@@ -69,11 +78,15 @@ type WorkflowRecord = {
   phase: string;
   facts: string;
   candidates: string | null;
+  selection: string | null;
+  hold: string | null;
   target_booking_id: string | null;
   pending_question: string | null;
   version: number;
   updated_at: number;
 };
+
+const json = (value: unknown): string | null => (value ? JSON.stringify(value) : null);
 
 const decode = (row: WorkflowRecord): WorkflowRow => ({
   id: row.id,
@@ -83,6 +96,8 @@ const decode = (row: WorkflowRecord): WorkflowRow => ({
   phase: row.phase,
   facts: JSON.parse(row.facts || "{}") as Facts,
   candidates: row.candidates ? (JSON.parse(row.candidates) as unknown[]) : null,
+  selection: row.selection ? (JSON.parse(row.selection) as Selection) : null,
+  hold: row.hold ? (JSON.parse(row.hold) as Hold) : null,
   target_booking_id: row.target_booking_id,
   pending_question: row.pending_question,
   version: row.version,
@@ -99,6 +114,8 @@ const timeFactHasBounds = (fact: Fact & { value: TimeWindow | null } | undefined
 export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => {
   let trace: Trace | undefined;
   let search: SearchTool | undefined;
+  let hold: HoldTool | undefined;
+  const approvals = approvalRepo(db);
   const nowMs = () => clock.now().getTime();
 
   const getActive = (conversationId: string): WorkflowRow | undefined => {
@@ -132,14 +149,14 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       if (existing) return { ok: false }; // only one active workflow per conversation
       const w = mutate({
         id: randomUUID(), conversation_id: conversationId, user_id: "", intent: null,
-        phase: "collecting", facts: {}, candidates: null, target_booking_id: null,
+        phase: "collecting", facts: {}, candidates: null, selection: null, hold: null, target_booking_id: null,
         pending_question: null, version: 0, updatedAt: nowMs(),
       } as WorkflowRow);
       try {
         db.prepare(
-          `INSERT INTO workflow (id, conversation_id, user_id, intent, phase, facts, candidates, target_booking_id, pending_question, version, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-        ).run(w.id, conversationId, w.user_id, w.intent, w.phase, JSON.stringify(w.facts), w.candidates ? JSON.stringify(w.candidates) : null, w.target_booking_id, w.pending_question, nowMs(), nowMs());
+          `INSERT INTO workflow (id, conversation_id, user_id, intent, phase, facts, candidates, selection, hold, target_booking_id, pending_question, version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        ).run(w.id, conversationId, w.user_id, w.intent, w.phase, JSON.stringify(w.facts), json(w.candidates), json(w.selection), json(w.hold), w.target_booking_id, w.pending_question, nowMs(), nowMs());
         return { ok: true, workflow: getActive(conversationId) };
       } catch (err) {
         if (String((err as Error).message).includes("UNIQUE")) return { ok: false }; // lost the one-active-workflow race
@@ -150,10 +167,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     next.updatedAt = nowMs();
     const result = db
       .prepare(
-        `UPDATE workflow SET intent = ?, phase = ?, facts = ?, candidates = ?, target_booking_id = ?, pending_question = ?, version = version + 1, updated_at = ?
+        `UPDATE workflow SET intent = ?, phase = ?, facts = ?, candidates = ?, selection = ?, hold = ?, target_booking_id = ?, pending_question = ?, version = version + 1, updated_at = ?
          WHERE conversation_id = ? AND version = ?`,
       )
-      .run(next.intent, next.phase, JSON.stringify(next.facts), next.candidates ? JSON.stringify(next.candidates) : null, next.target_booking_id, next.pending_question, nowMs(), conversationId, expectedVersion);
+      .run(next.intent, next.phase, JSON.stringify(next.facts), json(next.candidates), json(next.selection), json(next.hold), next.target_booking_id, next.pending_question, nowMs(), conversationId, expectedVersion);
     if (result.changes === 0) return { ok: false };
     if (existing!.phase !== next.phase) trace?.record("state_transition", { fromPhase: existing!.phase, toPhase: next.phase, reason: "apply" });
     return { ok: true, workflow: getActive(conversationId) };
@@ -166,11 +183,27 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     useRun: (run: RunTools | undefined): void => {
       trace = run?.trace;
       search = run?.search;
+      hold = run?.hold;
     },
 
     /** Apply one user message to the workflow (MH-1): fill facts, ask for missing ones. */
     applyUserText: async (userId: string, conversationId: string, text: string): Promise<ApplyOutcome> => {
-      const read: ReadResult = await model.read({ text, waitingFor: getActive(conversationId)?.phase ?? "nothing", clock });
+      const active = getActive(conversationId);
+      const shown = active?.phase === "choosing" ? (active.candidates as OptionBlock[] | null) ?? undefined : undefined;
+      const read: ReadResult = await model.read({ text, waitingFor: active?.phase ?? "nothing", clock, options: shown });
+
+      if (read.kind === "pick" || read.kind === "pick_unclear") {
+        if (!active || !shown?.length) {
+          return { phase: active?.phase ?? "collecting", reply: "There's no list of options to pick from right now.", code: "NOTHING_TO_PICK", facts: active?.facts ?? ({} as Facts) };
+        }
+        const chosen = read.kind === "pick" ? shown.find((b) => b.provider.id === read.providerId && b.slots.some((s) => s.start === read.slot)) : undefined;
+        if (read.kind === "pick_unclear" || !chosen) {
+          return { ...optionsOutcome(active, "Which slot? Tap one and press Confirm, or tell me the provider and the time."), code: read.kind === "pick" ? "NOTHING_TO_PICK" : undefined };
+        }
+        const saved = saveWorkflow(conversationId, active.version, (w) => ({ ...w, selection: { providerId: read.providerId, slot: read.slot }, phase: "holding" }));
+        if (!saved.ok || !saved.workflow) return { phase: active.phase, reply: "", code: "unknown_error", facts: active.facts };
+        return advance(saved.workflow);
+      }
 
       if (read.kind === "unknown" || read.kind === "decision") {
         // nothing is waiting for a plain yes/no at U17 (decisions come with U20)
@@ -289,7 +322,14 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     }
 
     const phase = phaseAfterChange(current, factChanged || timeChanged, facts);
-    const saved = saveWorkflow(conversationId, current.version, (w) => ({ ...w, facts, phase, candidates: factChanged || timeChanged ? null : w.candidates, intent: (values.intent as WorkflowRow["intent"]) ?? w.intent }));
+    const changed = factChanged || timeChanged; // rule 2: what was built on the facts clears
+    const saved = saveWorkflow(conversationId, current.version, (w) => ({
+      ...w,
+      facts,
+      phase,
+      ...(changed ? { candidates: null, selection: null, hold: null } : {}),
+      intent: (values.intent as WorkflowRow["intent"]) ?? w.intent,
+    }));
     if (!saved.ok || !saved.workflow) return { phase: current.phase, reply: "", code: "unknown_error", facts: current.facts };
     const savedWorkflow = saved.workflow;
 
@@ -309,8 +349,64 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return advance(savedWorkflow);
   }
 
-  /** `searching` needs no user input, so the code does it now (§ 2.5.3 step 6). */
+  function optionsOutcome(w: WorkflowRow, reply: string): ApplyOutcome {
+    return { phase: w.phase, reply, facts: w.facts, parts: [{ type: "option_blocks", blocks: w.candidates as OptionBlock[] }] };
+  }
+
+  /**
+   * `holding` needs no user input: hold the picked slot, then wait for approval with a
+   * pending record built from the saved selection and hold — never from model text (§ 2.5.5).
+   * The workflow save and the approval insert share one transaction.
+   */
+  function holdSelection(w: WorkflowRow): ApplyOutcome {
+    const selection = w.selection!;
+    const blocks = w.candidates as OptionBlock[];
+    const block = blocks.find((b) => b.provider.id === selection.providerId)!;
+    const held = hold!(selection);
+    if (!held.ok) {
+      // NFR-3: an answer, not a glitch — drop that slot and show what is left
+      const remaining = blocks
+        .map((b) => (b.provider.id === selection.providerId ? { ...b, slots: b.slots.filter((s) => s.start !== selection.slot) } : b))
+        .filter((b) => b.slots.length > 0);
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({ ...wf, candidates: remaining, selection: null, phase: remaining.length ? "choosing" : "searching" }));
+      if (!saved.ok || !saved.workflow) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+      if (!remaining.length) return advance(saved.workflow);
+      return { ...optionsOutcome(saved.workflow, "That slot was just taken — here are the options still open."), code: held.error };
+    }
+    const result = db.transaction(() => {
+      const saved = saveWorkflow(w.conversation_id, w.version, (wf) => ({
+        ...wf,
+        hold: { holdId: held.data.holdId, expiresAt: held.data.expiresAt, quotedPrice: held.data.quotedPrice },
+        phase: "awaiting_approval",
+      }));
+      if (!saved.ok || !saved.workflow) return undefined;
+      const record = approvals.createPending(
+        {
+          user_id: w.user_id,
+          conversation_id: w.conversation_id,
+          workflow_id: w.id,
+          action: "book",
+          provider_id: selection.providerId,
+          slot: selection.slot,
+          price: held.data.quotedPrice, // V-2: the user approves the quoted price
+          hold_id: held.data.holdId,
+        },
+        nowMs(),
+      );
+      return { workflow: saved.workflow, record };
+    })();
+    if (!result) return { phase: w.phase, reply: "", code: "unknown_error", facts: w.facts };
+    trace?.record("approval_event", { approvalId: result.record.id, event: "created", action: "book", providerId: result.record.provider_id, slot: result.record.slot, price: result.record.price });
+    const changed = result.record.price !== block.provider.price;
+    const reply = changed
+      ? `The provider quoted ₹${result.record.price.toLocaleString("en-IN")} for this slot (the search showed ₹${block.provider.price.toLocaleString("en-IN")}). Approve to book it at the new price, or decline.`
+      : `Here are the details — approve to book, or decline.`;
+    return { phase: "awaiting_approval", reply, facts: result.workflow.facts, parts: [approvalCardPart(result.record, block.provider.name)] };
+  }
+
+  /** Phases that need no user input run now (§ 2.5.3 step 6): searching, holding. */
   function advance(w: WorkflowRow): ApplyOutcome {
+    if (w.phase === "holding" && hold) return holdSelection(w);
     if (w.phase !== "searching" || !search) return replyFor(w);
     const service = String(w.facts.service!.value);
     const area = String(w.facts.area!.value);

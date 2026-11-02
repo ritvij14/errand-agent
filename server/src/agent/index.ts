@@ -1,6 +1,7 @@
 import type { Clock } from "../shared/clock.js";
 import { readUserMessage } from "./model.js";
 import type { ReadResult } from "./model.js";
+import type { OptionBlock } from "./options.js";
 
 // The model slot (ADR-002): the agent core always talks to this interface. Phase 1
 // ships the scripted model; a recorded model (phase 2) or OpenRouter (phase 3)
@@ -12,6 +13,7 @@ export type ReadJob = {
   text: string;
   waitingFor: string; // what the agent is waiting for (approval, options, nothing)
   clock: Clock; // the controllable clock (NFR-7), so time phrases resolve to "now"
+  options?: OptionBlock[]; // the options on screen, so a pick can name one
 };
 
 export type AgentModel = {
@@ -24,7 +26,7 @@ const HELP_REPLY = `I can help you book, reschedule or cancel home services (plu
 Try: "Find a plumber this week in HSR Layout under ₹1,500."`;
 
 export const scriptedModel: AgentModel = {
-  read: (job) => readUserMessage(job.text, job.clock),
+  read: (job) => readUserMessage(job.text, job.clock, job.options),
   write: () => HELP_REPLY,
 };
 

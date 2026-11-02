@@ -24,8 +24,9 @@ export const holdSlot = (
   args: { providerId: string; slot: string },
 ): ToolResult<{ holdId: string; slot: string; quotedPrice: number; expiresAt: number }> => {
   const { settings } = opts;
+  const forced = forcedOutcome(opts, "hold_slot"); // "price_changed" | "slot_unavailable"
   const slotMs = Date.parse(args.slot);
-  if (Number.isNaN(slotMs) || slotMs <= opts.clock.now().getTime()) {
+  if (forced === "slot_unavailable" || Number.isNaN(slotMs) || slotMs <= opts.clock.now().getTime()) {
     return { ok: false, error: "slot_unavailable", transient: false };
   }
   if (!isFree(db, opts, args.providerId, args.slot)) {
@@ -37,7 +38,9 @@ export const holdSlot = (
   if (!provider) return { ok: false, error: "not_found", transient: false };
   const attempt = nextAttempt(db, "hold_slot", `${args.providerId}|${args.slot}`);
   let quotedPrice = provider.price;
-  if (randomDraw({ seed: opts.seed, tool: "hold_quote", inputs: [args.providerId, args.slot], attempt }) < settings.priceDiffProb) {
+  if (forced === "price_changed") {
+    quotedPrice = Math.round(provider.price * 1.1); // a visible change, inside the ±15% band
+  } else if (randomDraw({ seed: opts.seed, tool: "hold_quote", inputs: [args.providerId, args.slot], attempt }) < settings.priceDiffProb) {
     const drift = randomDraw({ seed: opts.seed, tool: "hold_drift", inputs: [args.providerId, args.slot], attempt });
     quotedPrice = Math.max(1, Math.round(provider.price * (1 + (drift * 2 - 1) * settings.priceDiffMax)));
   }

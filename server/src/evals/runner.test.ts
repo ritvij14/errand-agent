@@ -25,6 +25,16 @@ describe("the eval runner", () => {
     w.testDb.close();
   });
 
+  it("eval 5's price check is real: without the forced price change the same scenario fails", async () => {
+    const w = evalWorld();
+    const five = SCENARIOS["5"]!;
+    const unforced = { ...five, id: "5-unforced", steps: five.steps.filter((s) => s.step !== "force") };
+    const result = await runScenario(w.testDb.db, unforced, w.user);
+    expect(result.pass).toBe(false);
+    expect(result.firstFailure).toMatch(/card price ≠ search price|quoted/);
+    w.testDb.close();
+  });
+
   it("fails a deliberately broken scenario and names the first failing check", async () => {
     const w = evalWorld();
     const broken = {
