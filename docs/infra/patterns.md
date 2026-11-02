@@ -24,8 +24,7 @@
 ## Index
 
 - [Cross-Feature Access](#cross-feature-access) — How to access another feature's data or logic without breaking module boundaries
-- [Pattern name](#pattern-name) — [one line on what problem it solves]
-- [Pattern name](#pattern-name) — [one line on what problem it solves]
+- [Two Clocks and Seeded Chance](#two-clocks-and-seeded-chance) — How time and randomness are injected and kept separate
 
 ---
 
@@ -123,3 +122,17 @@ import { getUserById } from "@/users/services/user.service";
 
 <!-- Add new patterns below as they emerge -->
 <!-- Minimum bar: if you had to figure it out once, write it down so nobody has to figure it out again -->
+
+## Two Clocks and Seeded Chance
+
+**Problem this solves:**
+The system must be offline-reproducible (NFR-4, NFR-7) yet also prove a real hard deadline (R8) — one clock can't do both jobs honestly.
+
+**The two clocks, kept separate:**
+
+- **Calendar clock** — `server/src/shared/clock.ts` (`createClock`). Real time by default; `setNow` / `advanceMs` in tests and evals. Everything calendar-shaped goes through it: slots, hold expiry, timestamps (unix milliseconds, R11), trace `clock_at`.
+- **Elapsed timer** — `server/src/shared/elapsed.ts` (`createElapsed`). Monotonic since start (real or injected tick). Only run deadlines and durations. Clock-advance can never satisfy a cap, and a simulated pause can never hide real elapsed time (`clock_at` jumps, `duration_ms` stays near 0).
+
+**Seeded chance** — `server/src/shared/random.ts` (`randomDraw`): one draw = hash of `seed | tool | inputs... | attempt`, so adding any call anywhere never shifts another call's outcome, and still, a retry (new attempt number) can draw a different outcome than its first try (otherwise a timed-out call would time out forever).
+
+**When to use it:** every place the code needs "now", "how long has this run been going", or a random outcome. Never `Date.now()` or `Math.random()` directly.
