@@ -9,7 +9,7 @@ import { SERVICES, AREAS, type Service, type Area } from "./mock-world.js";
 
 export type ToolOpts = FreeSlotsOpts;
 
-export type ToolResult<T> = { ok: true; data: T } | { ok: false; error: string; transient: false };
+export type ToolResult<T> = { ok: true; data: T } | { ok: false; error: string; transient: boolean };
 
 export type ProviderSummary = {
   id: string;

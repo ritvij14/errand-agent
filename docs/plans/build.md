@@ -122,7 +122,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U08 Write tools: hold_slot, book, get_booking_status, with forced outcomes
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 13 write-tool tests red→green (suite 53/53). Key reds caught real bugs first: quoted-price-vs-search (probabilistic, so the test now pins range + some-differ), hold expiry measured from hold creation (clock pause test), the R7 fault-injection rollback, slot_taken really moves the slot to another user, key replay. Commit `+ U08 sha`.
 - **Depends on.** U07.
 - **Covers.** Brief tool table rows 4–6, § 2.5.4 randomness and settings, NFR-4, R7.
 - **Build.** `hold_slot` (10-minute expiry on the clock, quoted price differs on about 20% of holds by up to ±15%, `slot_unavailable`). `book` (70 / 15 / 15 split, timeout with half actually booked, timeout pause on the clock, `hold_expired`, same key returns the same final result, timeouts not remembered). `get_booking_status` reads provider records. A forced-outcome queue per tool used before random draws. Booking plus key result written in one transaction.
