@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "evals": "tsx src/evals/eval.cli.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

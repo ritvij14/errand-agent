@@ -12,10 +12,11 @@
   "scripts": {
     "dev": "concurrently -n server,client \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w server && npm run build -w client",
-    "test": "npm run test -w server",
+    "test": "npm run test -w server && npm run evals -w server",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "evals": "npm run evals -w server"
   },
   "devDependencies": {
     "concurrently": "^10.0.6",

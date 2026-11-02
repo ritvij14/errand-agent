@@ -179,7 +179,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U13 Eval runner skeleton and eval table
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 3 runner tests red→green (`server/src/evals/runner.test.ts`; suite 86/86). Root `npm test` = Vitest then evals (`npm run evals`); `docs/evals/eval-table.md` regenerated with date, commit, seed; E0 pass. Invariants I-4, I-5, I-9 checked after every step.
 - **Depends on.** U09, U12.
 - **Covers.** MH-8, § 2.5.10 how a scenario runs, eval table, R11 (`npm test` runs evals).
 - **Build.** `server/src/evals`: scenario steps `say`, `click`, `advance`, `restart`, `send_concurrently`, `expect`. A fresh database, fixed seed and fixed clocks per scenario. Forced outcomes queued into the mock. Invariants checked after every step, starting with I-4, I-5 and I-9. The table goes to the terminal and `docs/evals/eval-table.md` with run date, commit and seed. `npm run evals`. Root `npm test` runs Vitest and then evals, and fails if either fails.
