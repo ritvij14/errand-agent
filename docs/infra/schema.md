@@ -199,11 +199,12 @@ Forgotten rows stay as hidden markers that block re-inferring the same value.
 
 ```sql
 CREATE TABLE schema_migration (
-  version INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
+  name TEXT PRIMARY KEY,
   applied_at INTEGER NOT NULL
 ) STRICT;
 ```
+
+(Implementation detail: the file name is the migration's identity — a rerun skips applied files by name. The planned `version` integer is unnecessary and was not built.)
 
 ---
 
@@ -313,4 +314,5 @@ Numbered SQL files in `server/migrations/`, applied in order on start; applied v
 
 | Migration  | Date | What changed                                                                                                               |
 | ---------- | ---- | -------------------------------------------------------------------------------------------------------------------------- |
-| _none yet_ | —    | Planned: `001_auth`, `002_conversations_runs_traces`, `003_workflow_approval_operation`, `004_memory`, `005_mock_provider` |
+| 001_mock_world | 2026-11-02 | Provider side: `mock_provider`, `mock_provider_area`, `mock_review`, `mock_booking` (+`area`, R4), `mock_hold`, `mock_idempotency`, `mock_attempt` |
+| _later_        | —    | Planned: `002_auth`, `003_conversations_runs_traces`, `004_workflow_approval_operation`, `005_memory` |

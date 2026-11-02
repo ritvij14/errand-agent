@@ -100,7 +100,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U06 Mock world seed and slot calculation
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: 10 tests red→green (`server/src/tools/mock-world.test.ts`, suite 30/30); QA `/tmp/verify-U06/seed-summary.txt` — 44 providers (roughly 40), 25/25 pairs in 3–8, 5 injection kinds, demo bookings with price+area. Commit `+ U06 sha`.
 - **Depends on.** U04, U05.
 - **Covers.** § 2.3, § 2.5.4 mock world data and free slots, NFR-4.
 - **Build.** `server/src/tools` mock tables. 5 services, 5 areas, about 40 made-up Bengaluru-style providers, prices in range, ratings, attributes, 3–6 reviews each, the 5 hand-written injection reviews spread over providers, seeded past and upcoming bookings for fixed demo user ids. Free slots calculated from seed + provider + date.
