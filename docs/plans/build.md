@@ -501,7 +501,13 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U40 Bugs write-up, demo script and the manual QA checklist
 
-- [ ] Done. Evidence:
+- [x] Done (operator steps open). Evidence:
+  - `docs/bugs.md` "three picked": B1, B4 and B7, each with its named regression test. The four tests pass alone (`vitest -t`) and in `npm test`.
+  - `docs/demo-script.md`: 3 scenes. Booking + live timeout-after-success via `DEMO_FORCE`, then injection via Details on Sri Sai Plumbing Works, then stated vs inferred memory.
+  - `docs/qa-checklist.md`: sign-in, chat basics, booking, details/injection, memory panel, trace panel (U14/U26/U31/U34/U35).
+  - Script steps driven on the dev server: the injection review comes back `suspectedInjection: true` and the run calls only `get_provider`; "the same electrician as last time" creates an `awaiting_confirmation` fact; "Saturday evening" offers only 17:00.
+  - Submission checklist: deliverables 1–5 ticked (1 was missed in U38). 6 waits for the operator's recording.
+  - Operator steps left: run `docs/qa-checklist.md`, record the demo, add the link.
 - **Depends on.** U38, U39.
 - **Covers.** Deliverables 4 and 6, the operator's deferred manual check.
 - **Build.** Pick three real bugs from `docs/bugs.md`, each with its regression test linked. A 3–5 minute demo script: one full booking plus a live injection and a live timeout-after-success, with chat and trace side by side. A manual browser checklist for the operator covering every page feature from U14, U26, U31, U34 and U35.

@@ -2,6 +2,16 @@
 
 > Real bugs hit while building, fixed on the spot. Deliverable 4 ("three real bugs, each with a regression test") is picked from this log — never reconstructed later. Do not write entries for bugs that have not actually happened.
 
+## Deliverable 4 — the three picked
+
+One per layer: the time parser, the eval suite's reproducibility, and the traces. Full write-ups below. Each regression test is named and passes (`npm test`; rerun alone with `npx vitest run -t "<name>"` in `server/`).
+
+| Bug                                                                        | What broke                                                                                                            | Regression test (red → green)                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [B1](#b1--this-week-mornings-only-found-nothing-when-asked-in-the-evening) | "This week, mornings only" asked at 17:54 found nothing: "now" was written into `earliest` for every day              | `server/src/agent/time-window.test.ts` "a multi-day window said in the evening keeps every day's mornings (no 'now' bound)"; `server/src/agent/search.flow.test.ts` "asked in the evening, 'this week, mornings only' still offers the coming mornings" |
+| [B4](#b4--booking-evals-passed-or-failed-by-luck)                          | Booking evals passed or failed by luck: an unforced `book` drew a random outcome from a random-UUID key               | `server/src/evals/runner.test.ts` "every scenario that approves a booking queues its book outcome, so it never depends on a random key (NFR-4)"                                                                                                         |
+| [B7](#b7--traces-recorded-no-latency)                                      | Traces recorded no latency (MH-7): every `durationMs` was null; the run's "duration" counted the simulated 10 s pause | `server/src/agent/booking.flow.test.ts` "the trace records real latency for every model and tool call, never the simulated 10 s pause (MH-7)"                                                                                                           |
+
 ## Bugs
 
 _Format per entry: what broke · why · where fixed · the regression test that first failed (red) then passed (green) · commit._
@@ -17,7 +27,7 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 ### B2 — A complete request in one message stayed in `collecting`
 
 - **What broke.** "plumber in HSR Layout this week" (every required detail at once) got the generic help reply instead of moving on; only requests split over two messages advanced.
-- **Why.** Creating a workflow computed its phase from the *empty starting* facts (`nextPhase(w.facts)`) instead of the facts just read, so it always said `collecting` — with nothing missing, the reply was empty and the help text filled in.
+- **Why.** Creating a workflow computed its phase from the _empty starting_ facts (`nextPhase(w.facts)`) instead of the facts just read, so it always said `collecting` — with nothing missing, the reply was empty and the help text filled in.
 - **Fix.** `server/src/agent/workflow.ts`: `nextPhase({ ...w.facts, ...facts })`.
 - **Regression test (red → green).** `workflow.test.ts` "a request with every required detail in one message leaves collecting at once"; `search.flow.test.ts` "a complete request returns numbered provider blocks…".
 - **Commit.** U18.
