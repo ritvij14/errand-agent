@@ -490,7 +490,7 @@ Run it with the `build-plan` skill. QA on the running app uses the `verify` skil
 
 ### U39 Design note with the annotated trace
 
-- [ ] Done. Evidence:
+- [x] Done. Evidence: `docs/design-note.md`: 977 words of prose plus the annotated excerpt of `traces/783dbb24…json`, six sections ending with the 100× list (process-local busy marker + rate limiter, one SQLite writer with per-event trace inserts, scripted-reader phrasing coverage, blocking startup recovery). Checked against code: unique `approval_id`, `one_in_flight_operation_per_booking` index, `busyMarkers` Set, module-level sign-in `buckets` Map, eval ids. Two real gaps found while checking claims, fixed with TDD on the user's go-ahead (`48457f5`): **B7** traces had no latency (`durationMs` null everywhere) → real elapsed per tool/model call and run, `run_ended.countedMs` for cap time; **B6** "evening"/"afternoon" ignored by the time parser. The deliverable-5 trace was re-exported with latency (old `5993634e…` removed). Server 304/304, evals 30/30, client 34/34.
 - **Depends on.** U37.
 - **Covers.** Deliverable 2, deliverable 5 excerpt, R12, review § 4.
 - **Build.** `docs/design-note.md`, at most 2 pages: state model, approval enforcement, idempotency and recovery, memory, observability, the annotated timeout-after-success excerpt, and what breaks first at 100× and what we would change.
