@@ -25,7 +25,7 @@ Each approved action becomes an **operation row saved before the tool call**, wi
 
 ## 4. Memory
 
-Per user, the brief's three keys: area, earliest time, preferred provider (per service). **Stated** facts come only from lasting phrasing ("I live in HSR", "never before 10"). A one-off "plumber in HSR" is not saved, because people book for others. **Inferred** facts come from structured booking history (the same provider in 2 completed bookings). They start `awaiting_confirmation` and are used only after a "yes" (I-7). Fills carry the fact id and are re-checked at every run start, so a forget or correction (chat or panel) reaches open workflows (I-6). A forgotten row blocks re-inferring that value. A request that differs from memory wins for that request only, with a one-line note (evals 16–19).
+Per user, the brief's three keys: area, earliest time, preferred provider (per service). **Stated** facts come only from lasting phrasing ("I live in HSR", "never before 10"). A one-off "plumber in HSR" is not saved, because people book for others. **Inferred** facts come from structured history: the same provider, or the same area, in 2 completed bookings; the same "not before X" in 2 finished bookings. They start `awaiting_confirmation` and are used only after a Keep or "yes" bound to that fact's id, like an approval (I-7). Fills carry the fact id and are re-checked at every run start, so a forget or correction (chat or panel) reaches open workflows (I-6). A forgotten row blocks re-inferring that value. A request that differs from memory wins for that request only, with a one-line note (evals 16–19).
 
 ## 5. Observability
 
