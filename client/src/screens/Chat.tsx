@@ -68,7 +68,7 @@ export function Chat() {
   };
 
   return (
-    <div className="mx-auto flex h-screen max-w-3xl flex-col p-4">
+    <div className="flex h-screen w-full flex-col p-4">
       <header className="mb-4 flex items-center justify-between border-b border-neutral-200 pb-2">
         <h1 className="text-lg font-semibold">errand-agent</h1>
         <button className="text-xs text-neutral-500 underline" onClick={() => signOut.mutate()}>
