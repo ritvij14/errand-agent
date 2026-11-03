@@ -6,13 +6,13 @@
 
 1. `DEMO_FORCE=book=timeout_booked npm run verify:reset` (fresh db, servers up with the knob armed).
 2. As alice: "book a plumber in HSR Layout tomorrow morning" → pick a slot's `pickText` → "yes" with the card's `approvalId`.
-3. Reply: "Booked: … Booking id: X." (after the 10 s simulated pause — the clock, not real time).
+3. Reply: "Booked: … Booking id: X." — straight away: the 10 s timeout pause is simulated. It counts toward the run's time cap (`run_ended.countedMs` ≈ 10 000) but never moves the app clock, which is real time (B14).
 4. `GET /api/runs/<that run id>/trace` → `tool_call book` `errorCode: timeout`, then `tool_call get_booking_status` result `status: booked`.
 5. `npm run trace:export -- <run id>` → `traces/<run id>.json`.
 
 ## Proof
 
-- Committed file: `traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json` (12 events, real `durationMs` on model/tool calls and `run_ended`; un-ignored in `.gitignore`).
+- Committed file: `traces/61943514-4f6e-487c-8e2c-c53af40a62fe.json` (12 events, real `durationMs` on model/tool calls and `run_ended`; un-ignored in `.gitignore`).
 - One provider booking: `sqlite3 server/data/errand.db "SELECT COUNT(*) FROM mock_booking WHERE user_id='u-demo-alice' AND status='booked'"` rises by one.
 
 ## Gotchas

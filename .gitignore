@@ -11,5 +11,5 @@ dist/
 .vitest/
 server/data/
 traces/*
-# deliverable 5: the committed timeout-after-success trace (U37, re-exported U39)
-!traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json
+# deliverable 5: the committed timeout-after-success trace (U37; re-exported after B14, real-time clock)
+!traces/61943514-4f6e-487c-8e2c-c53af40a62fe.json

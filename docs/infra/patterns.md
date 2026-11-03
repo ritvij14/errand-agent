@@ -130,7 +130,7 @@ The system must be offline-reproducible (NFR-4, NFR-7) yet also prove a real har
 
 **The two clocks, kept separate:**
 
-- **Calendar clock** — `server/src/shared/clock.ts` (`createClock`). Real time by default; `setNow` / `advanceMs` in tests and evals. Everything calendar-shaped goes through it: slots, hold expiry, timestamps (unix milliseconds, R11), trace `clock_at`.
+- **Calendar clock** — `server/src/shared/clock.ts` (`createClock`). Real time by default — and then always real time: `setNow` / `advanceMs` are ignored, so simulated pauses never push the app ahead (B14). Created with a fixed `now` (tests and evals), it stays fixed and `setNow` / `advanceMs` move it. Everything calendar-shaped goes through it: slots, hold expiry, timestamps (unix milliseconds, R11), trace `clock_at`.
 - **Elapsed timer** — `server/src/shared/elapsed.ts` (`createElapsed`). Monotonic since start (real or injected tick). Only run deadlines and durations. Clock-advance can never satisfy a cap, and a simulated pause can never hide real elapsed time (`clock_at` jumps, `duration_ms` stays near 0).
 
 **Seeded chance** — `server/src/shared/random.ts` (`randomDraw`): one draw = hash of `seed | tool | inputs... | attempt`, so adding any call anywhere never shifts another call's outcome, and still, a retry (new attempt number) can draw a different outcome than its first try (otherwise a timed-out call would time out forever).

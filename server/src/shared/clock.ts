@@ -8,8 +8,19 @@ export type Clock = {
   advanceMs: (ms: number) => Date;
 };
 
+/**
+ * @remarks With no `now`, the clock IS real time: `advanceMs` / `setNow` are ignored, so the
+ * mock's simulated pauses (timeout, retry waits) never push the app ahead of the real time
+ * (B14). Those pauses still count toward the run's time cap through run-budget.ts.
+ */
 export const createClock = (opts?: { now?: Date }): Clock => {
-  let current = opts?.now ?? new Date();
+  if (!opts?.now)
+    return {
+      now: () => new Date(),
+      setNow: () => undefined,
+      advanceMs: () => new Date(),
+    };
+  let current = opts.now;
   return {
     now: () => new Date(current.getTime()),
     setNow: (d: Date) => {

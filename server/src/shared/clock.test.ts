@@ -17,6 +17,19 @@ describe("clock", () => {
     expect(seen).toBeLessThanOrEqual(after);
   });
 
+  it("the default clock keeps following real time after it is created", async () => {
+    const clock = createClock();
+    const first = clock.now().getTime();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(clock.now().getTime() - first).toBeGreaterThanOrEqual(50);
+  });
+
+  it("the default clock stays on real time: a simulated pause (advanceMs) doesn't push it ahead", () => {
+    const clock = createClock();
+    clock.advanceMs(10_000);
+    expect(Math.abs(clock.now().getTime() - Date.now())).toBeLessThan(1_000);
+  });
+
   it("advanceMs moves now and returns the new time", () => {
     const clock = createClock({ now: new Date("2026-11-02T06:30:00Z") });
     const moved = clock.advanceMs(10 * 60 * 1000);

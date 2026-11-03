@@ -118,6 +118,13 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/agent/workflow.ts`: the saved earliest time also bounds a request window without its own earliest; forgetting it keeps the request's days (`syncMemoryFacts`), with a time-specific note (it used to say "Your saved area is gone").
 - **Regression tests (red → green).** `agent/memory.flow.test.ts` "a saved 'never before 10' also bounds a request that names only days; forgetting it keeps the days (MH-6, R6)"; "a request's own earliest time wins over the saved one (V-11)" (guard, green from the start).
 
+### B14 — The running app's clock never moved
+
+- **What broke.** In `npm run dev` "now" stayed at the moment the server started: holds and approval cards never expired with real time, "today" never rolled over, and messages / runs / trace events from different minutes got the same time. Only the mock's simulated pauses moved it, a few seconds at a time.
+- **Why.** `createClock()` with no fixed time saved `new Date()` once and only changed it through `advanceMs`; its comment said "real time by default". Every test creates its clock with a fixed time, so nothing exercised the app's default.
+- **Fix.** `server/src/shared/clock.ts`: with no fixed time the clock returns the real time on every read, and `advanceMs` / `setNow` are ignored, so simulated pauses never push the app ahead of real time (operator's choice: strict real time). The pauses still count toward the 60 s cap through `run-budget.ts`. Deliverable-5 trace re-exported from a live run: `traces/61943514-4f6e-487c-8e2c-c53af40a62fe.json`.
+- **Regression tests (red → green).** `shared/clock.test.ts` "the default clock keeps following real time after it is created" (red: moved 0 ms); "the default clock stays on real time: a simulated pause (advanceMs) doesn't push it ahead" (red: 10 000 ms ahead).
+
 ## Invariants found broken by tests
 
 _None yet._

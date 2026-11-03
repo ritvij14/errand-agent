@@ -29,19 +29,19 @@ Per user, the brief's three keys: area, earliest time, preferred provider (per s
 
 ## 5. Observability
 
-One trace per run in SQLite: state transitions, model calls, tool name + args + cleaned result, approvals, operations, memory, limits, errors. Fields are allow-listed per event type, so no secret can be written (I-9 sweeps every eval). `clock_at` follows the controllable clock (the 10 s pause shows); `duration_ms` is real latency; tokens/cost are `null` ("scripted model"). The chat page shows the trace beside the reply; `npm run trace:export -- <run id>` writes the raw file.
+One trace per run in SQLite: state transitions, model calls, tool name + args + cleaned result, approvals, operations, memory, limits, errors. Fields are allow-listed per event type, so no secret can be written (I-9 sweeps every eval). `clock_at` is the app's clock: real time in the app, the fixed and advanceable clock in evals; `duration_ms` is real latency; `run_ended.countedMs` is the time the caps count (real + simulated pauses); tokens/cost are `null` ("scripted model"). The chat page shows the trace beside the reply; `npm run trace:export -- <run id>` writes the raw file.
 
-**Annotated excerpt.** Timeout after success: `traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json`, a real dev-app run with the dev-only `DEMO_FORCE=book=timeout_booked` switch.
+**Annotated excerpt.** Timeout after success: `traces/61943514-4f6e-487c-8e2c-c53af40a62fe.json`, a real dev-app run with the dev-only `DEMO_FORCE=book=timeout_booked` switch.
 
 ```
-#3  approval_event   approved via typed: book mp-011, Wed 4 Nov 10:00, ₹584     ← the user's yes, bound to the card's id
-#5  operation_event  created book, key e9453ce9…:1                              ← saved before any provider call
-#6  tool_call        book(hold ef586c94…, key …:1) → error: timeout   clock +10 s, 0 ms real
+#3  approval_event   approved via typed: book mp-011, Wed 4 Nov 09:00, ₹578     ← the user's yes, bound to the card's id
+#5  operation_event  created book, key c09b7e75…:1                              ← saved before any provider call
+#6  tool_call        book(hold f9aa347e…, key …:1) → error: timeout   1 ms real (10 s pause simulated)
 #7  state            executing → verifying                                    ← a timeout is never reported as either outcome
-#8  tool_call        get_booking_status(key …:1) → {status: booked, 38fc8978…}  ← the provider did book
-#9  operation_event  succeeded → 38fc8978…                                     ← no second book call
-#11 model_call       write "Booked: Deva Pipe Care … Booking id: 38fc8978…"     ← success stated only after verification
-#12 run_ended        completed, 2 model / 2 tool calls, countedMs 10003
+#8  tool_call        get_booking_status(key …:1) → {status: booked, bec91eb1…}  ← the provider did book
+#9  operation_event  succeeded → bec91eb1…                                     ← no second book call
+#11 model_call       write "Booked: Deva Pipe Care … Booking id: bec91eb1…"     ← success stated only after verification
+#12 run_ended        completed, 2 model / 2 tool calls, countedMs 10008         ← the simulated pause counts toward the 60 s cap
 ```
 
 ## 6. What breaks first at 100×, and what we'd change

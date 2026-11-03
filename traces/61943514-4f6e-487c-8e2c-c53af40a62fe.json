@@ -1,10 +1,10 @@
 {
   "run": {
-    "id": "783dbb24-0e44-4696-ac27-873308c3fe9d",
-    "conversationId": "9974ecf1-d2f8-4d9d-bc0f-60efb30998e6",
+    "id": "61943514-4f6e-487c-8e2c-c53af40a62fe",
+    "conversationId": "e6787020-6060-43f1-8917-13866f463912",
     "trigger": "message",
-    "startedAt": 1793671757219,
-    "endedAt": 1793671767219,
+    "startedAt": 1793690106097,
+    "endedAt": 1793690106106,
     "outcome": "completed",
     "modelCalls": 2,
     "toolCalls": 2
@@ -13,11 +13,11 @@
     {
       "seq": 1,
       "type": "run_started",
-      "clockAt": 1793671757219,
+      "clockAt": 1793690106098,
       "durationMs": null,
       "data": {
         "trigger": "message",
-        "conversationId": "9974ecf1-d2f8-4d9d-bc0f-60efb30998e6",
+        "conversationId": "e6787020-6060-43f1-8917-13866f463912",
         "userId": "u-demo-alice",
         "phase": "awaiting_approval"
       }
@@ -25,7 +25,7 @@
     {
       "seq": 2,
       "type": "model_call",
-      "clockAt": 1793671757219,
+      "clockAt": 1793690106099,
       "durationMs": 0,
       "data": {
         "job": "read",
@@ -39,22 +39,22 @@
     {
       "seq": 3,
       "type": "approval_event",
-      "clockAt": 1793671757219,
+      "clockAt": 1793690106100,
       "durationMs": null,
       "data": {
         "event": "approved",
         "via": "typed",
         "action": "book",
         "providerId": "mp-011",
-        "slot": "2026-11-04T10:00:00+05:30",
-        "price": 584,
-        "approvalId": "27d81c80-64ad-46b5-8274-0874b2c57005"
+        "slot": "2026-11-04T09:00:00+05:30",
+        "price": 578,
+        "approvalId": "b39f48e4-571a-431f-8ca8-93506e931543"
       }
     },
     {
       "seq": 4,
       "type": "state_transition",
-      "clockAt": 1793671757219,
+      "clockAt": 1793690106102,
       "durationMs": null,
       "data": {
         "fromPhase": "awaiting_approval",
@@ -65,24 +65,24 @@
     {
       "seq": 5,
       "type": "operation_event",
-      "clockAt": 1793671757219,
+      "clockAt": 1793690106102,
       "durationMs": null,
       "data": {
         "event": "created",
         "kind": "book",
-        "key": "e9453ce9-1cea-4274-94f9-11e90e0ffc3d:1"
+        "key": "c09b7e75-6703-4826-a859-745a8077c683:1"
       }
     },
     {
       "seq": 6,
       "type": "tool_call",
-      "clockAt": 1793671767219,
-      "durationMs": 0,
+      "clockAt": 1793690106104,
+      "durationMs": 1,
       "data": {
         "tool": "book",
         "args": {
-          "holdId": "ef586c94-d474-47af-8735-f79264288d78",
-          "idempotencyKey": "e9453ce9-1cea-4274-94f9-11e90e0ffc3d:1"
+          "holdId": "f9aa347e-801d-45de-acd7-efee9f93a711",
+          "idempotencyKey": "c09b7e75-6703-4826-a859-745a8077c683:1"
         },
         "attempt": 1,
         "ok": false,
@@ -94,7 +94,7 @@
     {
       "seq": 7,
       "type": "state_transition",
-      "clockAt": 1793671767219,
+      "clockAt": 1793690106105,
       "durationMs": null,
       "data": {
         "fromPhase": "executing",
@@ -105,36 +105,36 @@
     {
       "seq": 8,
       "type": "tool_call",
-      "clockAt": 1793671767219,
+      "clockAt": 1793690106105,
       "durationMs": 0,
       "data": {
         "tool": "get_booking_status",
         "args": {
-          "idempotencyKey": "e9453ce9-1cea-4274-94f9-11e90e0ffc3d:1"
+          "idempotencyKey": "c09b7e75-6703-4826-a859-745a8077c683:1"
         },
         "attempt": 1,
         "ok": true,
         "errorCode": null,
         "transient": null,
-        "result": "{\"status\":\"booked\",\"bookingId\":\"38fc8978-4fe4-4b61-9e22-614d3648961d\"}"
+        "result": "{\"status\":\"booked\",\"bookingId\":\"bec91eb1-91fb-4f4a-9e1b-fb8fc0fd8721\"}"
       }
     },
     {
       "seq": 9,
       "type": "operation_event",
-      "clockAt": 1793671767219,
+      "clockAt": 1793690106105,
       "durationMs": null,
       "data": {
         "event": "succeeded",
         "kind": "book",
-        "key": "e9453ce9-1cea-4274-94f9-11e90e0ffc3d:1",
-        "result": "38fc8978-4fe4-4b61-9e22-614d3648961d"
+        "key": "c09b7e75-6703-4826-a859-745a8077c683:1",
+        "result": "bec91eb1-91fb-4f4a-9e1b-fb8fc0fd8721"
       }
     },
     {
       "seq": 10,
       "type": "state_transition",
-      "clockAt": 1793671767219,
+      "clockAt": 1793690106106,
       "durationMs": null,
       "data": {
         "fromPhase": "verifying",
@@ -145,11 +145,11 @@
     {
       "seq": 11,
       "type": "model_call",
-      "clockAt": 1793671767219,
+      "clockAt": 1793690106106,
       "durationMs": 0,
       "data": {
         "job": "write",
-        "output": "Booked: Deva Pipe Care on Wed 4 Nov at 10:00, ₹584. Booking id: 38fc8978-4fe4-4b61-9e22-614d3648961d.",
+        "output": "Booked: Deva Pipe Care on Wed 4 Nov at 09:00, ₹578. Booking id: bec91eb1-91fb-4f4a-9e1b-fb8fc0fd8721.",
         "tokens": null,
         "cost": null,
         "notAvailable": "scripted model"
@@ -158,13 +158,13 @@
     {
       "seq": 12,
       "type": "run_ended",
-      "clockAt": 1793671767219,
-      "durationMs": 3,
+      "clockAt": 1793690106106,
+      "durationMs": 8,
       "data": {
         "outcome": "completed",
         "modelCalls": 2,
         "toolCalls": 2,
-        "countedMs": 10003
+        "countedMs": 10008
       }
     }
   ]

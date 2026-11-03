@@ -75,7 +75,7 @@ What the system must do. **Source** says where each one comes from: the brief, o
 | NFR-4 | **Reproducible:** mock randomness comes from a seeded generator (fixed default seed, configurable). Evals can also force exact outcomes per call (e.g. "next `book`: timeout, but actually booked"). Same seed + same inputs = same results.                                                                                                                                                                                                       | Brief — Tool environment    |
 | NFR-5 | **Survives restarts:** all state is saved before any call that changes something outside our process; a restart mid-booking resumes without double-booking.                                                                                                                                                                                                                                                                                        | Brief MH-3                  |
 | NFR-6 | **Offline:** no network calls outside the machine — at runtime, in tests, or in evals.                                                                                                                                                                                                                                                                                                                                                             | Brief — Overview            |
-| NFR-7 | **Time:** all times are in Asia/Kolkata (IST). "Now" comes from a clock object passed into the code — never read directly from the system — so tests and evals can set it and move it forward (e.g. expire a 10-minute hold instantly). Relative phrases ("Saturday", "10 a.m.") are turned into dates by chrono-node 2 using that clock's "now" and IST; our own rules handle ranges and qualifiers ("this week", "mornings only", "not before"). | Decision                    |
+| NFR-7 | **Time:** all times are in Asia/Kolkata (IST). "Now" comes from a clock object passed into the code — never read directly from the system — so tests and evals can set it and move it forward (e.g. expire a 10-minute hold instantly). In the running app it is always the real time; moving it forward only works on a clock created with a fixed time (B14). Relative phrases ("Saturday", "10 a.m.") are turned into dates by chrono-node 2 using that clock's "now" and IST; our own rules handle ranges and qualifiers ("this week", "mornings only", "not before"). | Decision                    |
 
 ### 2.3 Scale
 
@@ -526,8 +526,8 @@ All in one config file. Evals override some values so they run fast and test exa
 | Quoted price differs             | ~20% of holds, up to ±15%                                                                  | forced per scenario                                     | Q2     |
 | Reschedule `slot_conflict` slots | ~10% of slots, by seed                                                                     | forced per scenario                                     | Q4     |
 | `cancel` first call per booking  | 503                                                                                        | 503                                                     | Brief  |
-| Timeout pause                    | ~10 s — a visible stall in the demo; two timeouts in one run (20 s) still fit the 60 s cap | 0 real seconds (controllable clock)                     | Q3     |
-| Retry waits                      | 0.5 s, then 1 s                                                                            | same lengths on the controllable clock, no real waiting | NFR-2  |
+| Timeout pause                    | ~10 s, **simulated**: counted toward the 60 s cap (two timeouts, 20 s, still fit) but no real waiting, and the app clock stays real time (B14) | 0 real seconds; the controllable clock jumps 10 s | Q3     |
+| Retry waits                      | 0.5 s, then 1 s — simulated the same way (counted, not waited; app clock unmoved)           | same lengths on the controllable clock, no real waiting | NFR-2  |
 | Run time cap                     | 60 s                                                                                       | 60 s of elapsed time + simulated pauses (R8), not the calendar clock | NFR-1  |
 | Forced outcomes queue            | **Dev/demo only (off by default):** a settings flag enables queuing the next call of a tool, so the demo can show a forced timeout-after-success live (deliverables 5–6). Evals use their own forced-outcome queue and never read this flag | n/a — evals force outcomes through the runner | R12    |
 
@@ -784,7 +784,7 @@ A trace is the ordered list of **events** of one run (2.5.3), stored in SQLite u
 
 **Two kinds of time:**
 
-- `clock_at` — time from the controllable clock (NFR-7). Shows the story in IST, including waits and timeout pauses, even in evals where no real time passes.
+- `clock_at` — time from the controllable clock (NFR-7). In the app that is real time — simulated pauses don't move it (B14); they show in `run_ended.countedMs`. In evals and tests it is the fixed clock, so waits and timeout pauses show as jumps even though no real time passes.
 - `duration_ms` — real elapsed time measured by the machine. Shows actual latency. In evals a 10 s timeout pause shows `clock_at` jumping 10 s while `duration_ms` stays near 0.
 
 ##### Event types
