@@ -93,6 +93,35 @@ beforeEach(() => {
   mocked.sendMessage.mockResolvedValue(REPLY);
   mocked.decideApproval.mockResolvedValue(REPLY);
   mocked.trace.mockResolvedValue(TRACE_FIXTURE);
+  mocked.memory.mockResolvedValue([]);
+});
+
+describe("Chat — refresh after a reply", () => {
+  it("a chat message that saves a preference shows it in the memory panel without a reload", async () => {
+    const user = await openConversation();
+    expect(screen.queryByText(/you told me/)).toBeNull();
+    mocked.memory.mockResolvedValue([
+      {
+        id: "f1",
+        key: "area",
+        service: null,
+        value: "koramangala",
+        source: "stated",
+        status: "active",
+        evidence: null,
+      },
+    ]);
+    await user.type(screen.getByPlaceholderText(/Find a plumber/), "I live in Koramangala{Enter}");
+    await screen.findByText(/you told me/);
+  });
+
+  it("the new reply's trace starts loading with the conversation reload, not after it", async () => {
+    const user = await openConversation();
+    mocked.conversation.mockReturnValue(new Promise(() => undefined)); // the reload never answers
+    mocked.sendMessage.mockResolvedValue({ ...REPLY, runId: "r9" });
+    await user.type(screen.getByPlaceholderText(/Find a plumber/), "hello{Enter}");
+    await waitFor(() => expect(mocked.trace).toHaveBeenCalledWith("r9"));
+  });
 });
 
 describe("Chat — trace panel (FR-13, U35)", () => {

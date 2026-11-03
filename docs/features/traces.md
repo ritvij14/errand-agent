@@ -13,7 +13,7 @@
 ## The client panel (FR-13)
 
 - `components/TracePanel.tsx` — a right-hand column in Chat: the run's outcome + model/tool call counts, then one timeline line per event coloured by type (`tool_call book → timeout (0 ms)`, `state searching → choosing`, …; latency in ms). A line expands to its raw fields (JSON); a second click collapses it.
-- **Which run:** the latest agent reply's run loads automatically (`useTrace`); every agent reply that has a run shows a small "trace" link that switches the panel to that reply's run (`shownRunId = traceRunId ?? latestRunId`). A finished run's trace doesn't change (`staleTime: 60 s`, `retry: false` — a 404 for a foreign run shows the quiet placeholder).
+- **Which run:** the latest agent reply's run loads automatically (`useTrace`); every agent reply that has a run shows a small "trace" link that switches the panel to that reply's run (`shownRunId = traceRunId ?? latestRunId`). The new reply's trace is prefetched from the POST response's `runId` at the same time as the conversation reload, instead of waiting for the reload to reveal `latestRunId` (one round trip fewer). A finished run's trace doesn't change (`staleTime: 60 s`, `retry: false` — a 404 for a foreign run shows the quiet placeholder).
 
 ## Invariants
 

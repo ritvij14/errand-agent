@@ -49,5 +49,5 @@
   - **Edit** → an inline input + Save (`useEditMemory` → `PUT`); the panel's labels are presentational, the server re-validates the value.
   - **Confirm / Reject** for `awaiting_confirmation` facts (`POST` confirm/reject).
   - **Forget** for active ones (`DELETE`; the row stays as the re-inference marker).
-- Data flows through `shared/api-client.ts` (`api.memory*`) + `shared/queries.ts` (`useMemory` with staleness 5 s; every mutation invalidates `["memory"]` **and** `["conversation"]` so an open workflow learns the change at its next run (R6)).
+- Data flows through `shared/api-client.ts` (`api.memory*`) + `shared/queries.ts` (`useMemory` with staleness 5 s; every mutation invalidates `["memory"]` **and** `["conversation"]` so an open workflow learns the change at its next run (R6)). Every chat reply and approval decision also invalidates `["memory"]` (`refreshConversation`): a chat message can save or forget a fact, and before this the panel only caught up on refocus (bug B8).
 - The panel is disabled while any send, decision or memory mutation is pending (2.3).

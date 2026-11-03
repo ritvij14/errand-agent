@@ -26,9 +26,16 @@ export const useCreateConversation = () => {
   });
 };
 
-const refreshConversation = (client: ReturnType<typeof useQueryClient>, id: string) => {
+/**
+ * After a reply: reload the conversation, the list and memory (a chat message may save or
+ * forget a preference), and start the reply's trace at the same time — the reply already
+ * names its run, so the trace needn't wait for the conversation reload.
+ */
+const refreshConversation = (client: ReturnType<typeof useQueryClient>, id: string, runId?: string) => {
   client.invalidateQueries({ queryKey: ["conversation", id] });
   client.invalidateQueries({ queryKey: ["conversations"] });
+  client.invalidateQueries({ queryKey: ["memory"] });
+  if (runId) void client.prefetchQuery(traceQuery(runId));
 };
 
 export const useSendMessage = (id: string) => {
@@ -36,7 +43,7 @@ export const useSendMessage = (id: string) => {
   return useMutation({
     mutationFn: ({ text, approvalId }: { text: string; approvalId?: string }) =>
       api.sendMessage(id, text, randomUUID(), approvalId),
-    onSuccess: () => refreshConversation(client, id),
+    onSuccess: (reply) => refreshConversation(client, id, reply.runId),
   });
 };
 
@@ -46,7 +53,7 @@ export const useDecideApproval = (conversationId: string) => {
   return useMutation({
     mutationFn: ({ approvalId, decision }: { approvalId: string; decision: "approve" | "decline" }) =>
       api.decideApproval(approvalId, decision),
-    onSuccess: () => refreshConversation(client, conversationId),
+    onSuccess: (reply) => refreshConversation(client, conversationId, reply.runId),
   });
 };
 
@@ -98,11 +105,12 @@ export const useForgetMemory = () => useMemoryMutation<{ id: string }>(({ id }) 
 
 // ——— trace panel (FR-13, U35) ———
 
+const traceQuery = (runId: string) => ({
+  queryKey: ["trace", runId],
+  queryFn: () => api.trace(runId),
+  retry: false,
+  staleTime: 60_000, // a finished run's trace doesn't change
+});
+
 export const useTrace = (runId: string | null, enabled: boolean) =>
-  useQuery({
-    queryKey: ["trace", runId],
-    queryFn: () => api.trace(runId!),
-    enabled: enabled && runId !== null,
-    retry: false,
-    staleTime: 60_000, // a finished run's trace doesn't change
-  });
+  useQuery({ ...traceQuery(runId ?? ""), enabled: enabled && runId !== null });

@@ -73,6 +73,14 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 - **Regression test (red → green).** `booking.flow.test.ts` "the trace records real latency for every model and tool call, never the simulated 10 s pause" (red: `expected null to be type of 'number'`).
 - **Commit.** U39.
 
+### B8 — The memory panel ignored preferences saved through chat
+
+- **What broke.** Typing "I live in Koramangala" saved the fact on the server, but **Saved preferences** didn't show it until the window lost and regained focus or the page reloaded. Found by a code scan after U40 (not yet seen in the browser).
+- **Why.** `useSendMessage` / `useDecideApproval` reloaded only the conversation queries. Only the panel's own buttons invalidated `["memory"]`.
+- **Fix.** `client/src/shared/queries.ts` `refreshConversation` also invalidates `["memory"]`. In the same change, it prefetches the reply's trace by its `runId` (one round trip fewer, not a bug).
+- **Regression tests (red → green).** `client/src/screens/Chat.test.tsx` "a chat message that saves a preference shows it in the memory panel without a reload" (red: `/you told me/` not found); "the new reply's trace starts loading with the conversation reload, not after it" (red: trace never called with `r9`).
+- **Commit.** post-U40.
+
 ## Invariants found broken by tests
 
 _None yet._
