@@ -96,6 +96,58 @@ beforeEach(() => {
   mocked.memory.mockResolvedValue([]);
 });
 
+const renderChat = () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <Chat />
+    </QueryClientProvider>,
+  );
+  return userEvent.setup();
+};
+
+describe("Chat — no conversation open", () => {
+  it("shows only a New conversation button in the chat area — no message box that can't be typed in", async () => {
+    renderChat();
+    await screen.findByRole("button", { name: "Plumber this week" });
+    expect(screen.queryByPlaceholderText(/Find a plumber/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Start a new conversation" })).toBeTruthy();
+  });
+
+  it("starting a new conversation opens it, ready to type", async () => {
+    mocked.createConversation.mockResolvedValue({
+      id: "c2",
+      title: "New conversation",
+      createdAt: 0,
+      updatedAt: 0,
+      busy: false,
+    });
+    mocked.conversation.mockResolvedValue({ conversation: { id: "c2" }, messages: [], busy: false });
+    const user = renderChat();
+    await user.click(await screen.findByRole("button", { name: "Start a new conversation" }));
+    const box = (await screen.findByPlaceholderText(/Find a plumber/)) as HTMLInputElement;
+    expect(box.disabled).toBe(false);
+    expect(mocked.conversation).toHaveBeenCalledWith("c2");
+  });
+
+  it("the sidebar's + New conversation also opens the conversation it made", async () => {
+    mocked.createConversation.mockResolvedValue({
+      id: "c2",
+      title: "New conversation",
+      createdAt: 0,
+      updatedAt: 0,
+      busy: false,
+    });
+    mocked.conversation.mockResolvedValue({ conversation: { id: "c2" }, messages: [], busy: false });
+    const user = renderChat();
+    await user.click(await screen.findByRole("button", { name: "+ New conversation" }));
+    await screen.findByPlaceholderText(/Find a plumber/);
+    expect(mocked.conversation).toHaveBeenCalledWith("c2");
+  });
+});
+
 describe("Chat — refresh after a reply", () => {
   it("a chat message that saves a preference shows it in the memory panel without a reload", async () => {
     const user = await openConversation();

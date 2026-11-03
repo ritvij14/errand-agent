@@ -6,7 +6,7 @@
 
 - **App.tsx**: `useMe()` gate → `<SignIn />` or `<Chat />`.
 - **SignIn** (`screens/SignIn.tsx`): sign-in / sign-up with inline field errors rendered from the server's `details` (ApiError.details).
-- **Chat** (`screens/Chat.tsx`): conversation list (title + busy marker), new conversation, messages oldest-first with roles, composer — **Send disabled while a reply is pending** (2.3); Enter submits; agent structural parts rendered via a part-renderer placeholder (U26 fills it).
+- **Chat** (`screens/Chat.tsx`): full window width; conversation list (title + busy marker), new conversation (creating one also opens it); with no conversation open, the chat area shows only a **Start a new conversation** button, never a message box that can't be typed in; messages oldest-first with roles, composer — **Send disabled while a reply is pending** (2.3); Enter submits; agent structural parts rendered via a part-renderer placeholder (U26 fills it).
 
 ## Booking parts (U26, FR-9, FR-10, ADR-007)
 

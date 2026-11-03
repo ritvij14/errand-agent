@@ -60,6 +60,7 @@ export function Chat() {
   const shownCardId = isApprovalCard(newestCard) ? newestCard.approvalId : undefined;
   const shownFactId = isMemoryConfirm(newestCard) ? newestCard.factId : undefined;
   const trace = useTrace(shownRunId, shownRunId !== null);
+  const startConversation = () => create.mutate(undefined, { onSuccess: (c) => setSelected(c.id) });
   const send = () => {
     const text = draft.trim();
     if (!text || !selected || busy) return;
@@ -79,7 +80,7 @@ export function Chat() {
         <aside className="w-48 shrink-0 overflow-y-auto">
           <button
             className="mb-2 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
-            onClick={() => create.mutate()}
+            onClick={startConversation}
             disabled={create.isPending}
           >
             + New conversation
@@ -109,72 +110,86 @@ export function Chat() {
             onForget={(id) => forgetMemory.mutate({ id })}
           />
         </aside>
-        <main className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-neutral-200 p-3">
-            {messages.map((m: Message) => (
-              <div
-                key={m.id}
-                className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-neutral-900 text-white" : "bg-neutral-100"}`}
-              >
-                <p className="whitespace-pre-wrap">{m.text}</p>
-                {m.parts?.map((part, i) =>
-                  isOptionBlocks(part) ? (
-                    <OptionBlocks
-                      key={i}
-                      blocks={part.blocks}
-                      disabled={busy}
-                      onConfirm={(text) => sendMessage.mutate({ text })}
-                    />
-                  ) : isApprovalCard(part) ? (
-                    <ApprovalCard
-                      key={i}
-                      card={part}
-                      disabled={busy}
-                      onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })}
-                    />
-                  ) : isMemoryConfirm(part) ? (
-                    <MemoryConfirmCard
-                      key={i}
-                      card={part}
-                      disabled={busy}
-                      onAnswer={(memoryFactId, answer) => sendMessage.mutate({ text: answer, memoryFactId })}
-                    />
-                  ) : isBookingsList(part) ? (
-                    <BookingsList key={i} part={part} />
-                  ) : isProviderDetails(part) ? (
-                    <ProviderDetails key={i} part={part} />
-                  ) : null,
-                )}
-                {/* FR-13: each agent reply links to its own run's trace */}
-                {m.role === "agent" && m.runId && (
-                  <button
-                    className="mt-1 text-[10px] text-neutral-500 underline"
-                    onClick={() => setTraceRunId(m.runId ?? null)}
-                  >
-                    trace
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <footer className="mt-3 flex gap-2">
-            <input
-              className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder='e.g. "Find a plumber this week in HSR Layout"'
-              disabled={!selected || busy}
-            />
+        {selected === null ? (
+          <main className="flex flex-1 items-center justify-center rounded-lg border border-neutral-200">
             <button
               className="rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-              onClick={send}
-              disabled={!selected || busy}
+              onClick={startConversation}
+              disabled={create.isPending}
             >
-              {busy ? "…" : "Send"}
+              Start a new conversation
             </button>
-          </footer>
-        </main>
+          </main>
+        ) : (
+          <main className="flex flex-1 flex-col overflow-hidden">
+            <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-neutral-200 p-3">
+              {messages.map((m: Message) => (
+                <div
+                  key={m.id}
+                  className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-neutral-900 text-white" : "bg-neutral-100"}`}
+                >
+                  <p className="whitespace-pre-wrap">{m.text}</p>
+                  {m.parts?.map((part, i) =>
+                    isOptionBlocks(part) ? (
+                      <OptionBlocks
+                        key={i}
+                        blocks={part.blocks}
+                        disabled={busy}
+                        onConfirm={(text) => sendMessage.mutate({ text })}
+                      />
+                    ) : isApprovalCard(part) ? (
+                      <ApprovalCard
+                        key={i}
+                        card={part}
+                        disabled={busy}
+                        onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })}
+                      />
+                    ) : isMemoryConfirm(part) ? (
+                      <MemoryConfirmCard
+                        key={i}
+                        card={part}
+                        disabled={busy}
+                        onAnswer={(memoryFactId, answer) =>
+                          sendMessage.mutate({ text: answer, memoryFactId })
+                        }
+                      />
+                    ) : isBookingsList(part) ? (
+                      <BookingsList key={i} part={part} />
+                    ) : isProviderDetails(part) ? (
+                      <ProviderDetails key={i} part={part} />
+                    ) : null,
+                  )}
+                  {/* FR-13: each agent reply links to its own run's trace */}
+                  {m.role === "agent" && m.runId && (
+                    <button
+                      className="mt-1 text-[10px] text-neutral-500 underline"
+                      onClick={() => setTraceRunId(m.runId ?? null)}
+                    >
+                      trace
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <footer className="mt-3 flex gap-2">
+              <input
+                className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && send()}
+                placeholder='e.g. "Find a plumber this week in HSR Layout"'
+                disabled={!selected || busy}
+              />
+              <button
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+                onClick={send}
+                disabled={!selected || busy}
+              >
+                {busy ? "…" : "Send"}
+              </button>
+            </footer>
+          </main>
+        )}
         <aside
           aria-label="Trace panel"
           className="w-64 shrink-0 overflow-y-auto rounded-lg border border-neutral-200 p-3"
