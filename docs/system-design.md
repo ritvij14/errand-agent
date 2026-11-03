@@ -575,7 +575,7 @@ While an approval is waiting:
 | `slot`                                      | Book: the held slot. Reschedule: the **new** slot. Cancel: the booking's slot.                    |
 | `price`                                     | ₹, whole rupees. Book: the hold's `quoted_price`. Reschedule / cancel: the booking's price (V-9). |
 | `booking_id`                                | Reschedule / cancel only                                                                          |
-| `hold_id`                                   | Book only. Shown for reference; **not** part of what is approved (V-4).                           |
+| `hold_id`                                   | Book only. The hold the card's quoted price came from. **Not** one of the approved terms: a later re-hold at the same price keeps the approval (V-4). Gate 1 still checks it, so the operation is created for the hold the user saw. |
 | `status`                                    | `pending` → `approved` → `used`, or `declined`, or `voided`                                       |
 | `decided_via`                               | `button` \| `typed`                                                                               |
 | `void_reason`                               | e.g. `price_changed`, `slot_changed`, `user_correction`, `task_switched`                          |
@@ -594,7 +594,7 @@ While an approval is waiting:
 
 Authorization is split by what is being done, because the approval's status changes shape halfway through:
 
-- **Gate 1 — creating the operation (booking operations, 2.5.6 step 1).** Requires an approval that is `approved` (not yet used, not voided) whose action, provider, slot, price and booking id equal the request about to be persisted. Anything else → no operation. This is the only thing `approved` authorizes, and it happens exactly once, by the unique `approval_id` on operations.
+- **Gate 1 — creating the operation (booking operations, 2.5.6 step 1).** Requires an approval that is `approved` (not yet used, not voided) whose action, provider, slot, price and booking id equal the request about to be persisted — for `book`, also the hold id (the hold whose quoted price was shown). A same-price re-hold after `hold_expired` never passes Gate 1 again: it moves the existing operation to its next key (2.5.6), so the approval stands (V-4). Anything else → no operation. This is the only thing `approved` authorizes, and it happens exactly once, by the unique `approval_id` on operations.
 - **Gate 2 — executing and retrying the operation (tool gateway).** Requires a **persisted operation** whose approval is `used` (by this operation), whose request (hold id / booking id / new slot) equals the call's arguments, and whose status is `in_flight`. A retry is the same check with the operation's same key. Restart recovery passes the same gate with a user-bound tool client.
 
 So a `used` approval can never authorize a *new* operation (Gate 1 refuses it), and an `approved`-but-unused approval can never authorize a *tool call* (Gate 2 refuses it). A bug in one place can't book, cancel or reschedule without approval.

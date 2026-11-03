@@ -100,6 +100,10 @@ describe("Gate 1 — creating the operation", () => {
     expect(
       startBookOperation(w.db, w.clock, w.approval.id, { ...w.request, price: w.request.price + 1 }),
     ).toMatchObject({ ok: false });
+    // a different hold than the one the card's price came from
+    expect(
+      startBookOperation(w.db, w.clock, w.approval.id, { ...w.request, holdId: "another-hold" }),
+    ).toMatchObject({ ok: false });
     expect(operationRepo(w.db).forApproval(w.approval.id)).toBeUndefined();
     w.testDb.close();
   });

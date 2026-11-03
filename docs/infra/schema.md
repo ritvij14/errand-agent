@@ -133,7 +133,7 @@ CREATE TABLE approval (
   slot TEXT NOT NULL,
   price INTEGER NOT NULL,
   booking_id TEXT,                          -- reschedule / cancel
-  hold_id TEXT,                             -- book; reference only, not part of what is approved
+  hold_id TEXT,                             -- book; not an approved term (same-price re-hold keeps the approval, V-4), but Gate 1 checks it
   status TEXT NOT NULL CHECK (status IN ('pending','approved','used','declined','voided')),
   decided_via TEXT CHECK (decided_via IN ('button','typed')),
   void_reason TEXT,

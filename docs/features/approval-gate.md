@@ -25,10 +25,11 @@
 - At most one `pending`/`approved` approval per workflow (`one_open_approval` partial unique index).
 - The card always equals the record (tested: `pick.flow.test.ts`, eval 5 `cardMatchesApproval`).
 - Only the waiting card's own id, while `pending` and fresh, can be decided (`approval.flow.test.ts`).
+- One card answered from two tabs, or clicked many times, gives one outcome (`approval.flow.test.ts` "one card answered from two tabs…"): approve then decline → still `used`, "Already booked"; decline then approve → `declined` stays, "no longer valid", no operation; three Approve clicks at once → one run books, the others `CONVERSATION_BUSY`.
 
 ## The R1 rule — two gates
 
-- **Gate 1** (`booking/gates.ts` `startBookOperation`): only an `approved` approval equal to the request creates an operation, and that marks it `used`. A `used` approval can never authorize a new operation; the unique `approval_id` on operations backs this in the database.
+- **Gate 1** (`booking/gates.ts` `startBookOperation`): only an `approved` approval equal to the request (provider, slot, price and the hold id the card's price came from) creates an operation, and that marks it `used`. `hold_id` is checked here but is not an approved term: a same-price re-hold moves the existing operation to its next key and never re-enters Gate 1 (V-4). A `used` approval can never authorize a new operation; the unique `approval_id` on operations backs this in the database.
 - **Gate 2** (`booking/gates.ts` `authorizeWrite`, injected into the tool gateway): a `book` call runs only for a persisted `in_flight` operation whose approval is `used` and whose request equals the call. An `approved`-but-unused approval can never authorize a tool call.
 - Repeated approvals report the existing operation ("Already booked" / "Already cancelled" / "Already moved").
 - **Reschedule (U29):** Gate 1 `startRescheduleOperation` — the approval's `booking_id` and new `slot` must equal the request; its price is the booking's (V-9). Gate 2 checks every field of the operation's own request (`holdId`; `bookingId`; `bookingId` + `newSlot`).

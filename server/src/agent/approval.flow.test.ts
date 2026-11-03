@@ -218,6 +218,71 @@ describe("voiding and stale cards", () => {
   });
 });
 
+describe("one card answered from two tabs, or clicked many times", () => {
+  const counts = (t: Awaited<ReturnType<typeof setup>>, approvalId: string) => ({
+    operations: (
+      t.testDb.db.prepare(`SELECT COUNT(*) AS c FROM operation WHERE approval_id = ?`).get(approvalId) as {
+        c: number;
+      }
+    ).c,
+    bookings: (t.testDb.db.prepare(`SELECT COUNT(*) AS c FROM mock_booking`).get() as { c: number }).c,
+  });
+
+  it("approved in one tab, then declined in another: the decline changes nothing and reports the booking", async () => {
+    const t = await setup();
+    const card = await t.toCard();
+    const before = counts(t, card.approvalId).bookings;
+    const approved = await t.click(card.approvalId, "approve");
+    if (!approved.ok) throw new Error(approved.code);
+    expect(approved.reply.message.text).toMatch(/^Booked:/);
+
+    const declined = await t.click(card.approvalId, "decline");
+    if (!declined.ok) throw new Error(declined.code);
+    expect(declined.reply.message.text).toMatch(/already booked/i);
+    expect(t.approval(card.approvalId)).toMatchObject({ status: "used" });
+    expect(t.workflow().phase).toBe("done");
+    expect(counts(t, card.approvalId)).toEqual({ operations: 1, bookings: before + 1 });
+    t.testDb.close();
+  });
+
+  it("declined in one tab, then approved in another: the approve is stale and nothing is booked", async () => {
+    const t = await setup();
+    const card = await t.toCard();
+    const before = counts(t, card.approvalId).bookings;
+    const declined = await t.click(card.approvalId, "decline");
+    if (!declined.ok) throw new Error(declined.code);
+
+    const approved = await t.click(card.approvalId, "approve");
+    if (!approved.ok) throw new Error(approved.code);
+    expect(approved.reply.message.text).toMatch(/no longer valid/i);
+    expect(approved.reply.message.text).not.toMatch(/^Booked/);
+    expect(t.approval(card.approvalId)).toMatchObject({ status: "declined" });
+    expect(t.workflow().phase).toBe("choosing");
+    expect(counts(t, card.approvalId)).toEqual({ operations: 0, bookings: before });
+    t.testDb.close();
+  });
+
+  it("Approve clicked three times at once: one run books, the others are refused with CONVERSATION_BUSY", async () => {
+    const t = await setup();
+    const card = await t.toCard();
+    const before = counts(t, card.approvalId).bookings;
+    const results = await Promise.all([
+      t.click(card.approvalId, "approve"),
+      t.click(card.approvalId, "approve"),
+      t.click(card.approvalId, "approve"),
+    ]);
+    const ran = results.filter((r) => r.ok);
+    expect(ran).toHaveLength(1);
+    expect(ran[0]!.ok && ran[0]!.reply.message.text).toMatch(/^Booked:/);
+    expect(results.filter((r) => !r.ok)).toEqual([
+      expect.objectContaining({ ok: false, code: "CONVERSATION_BUSY" }),
+      expect.objectContaining({ ok: false, code: "CONVERSATION_BUSY" }),
+    ]);
+    expect(counts(t, card.approvalId)).toEqual({ operations: 1, bookings: before + 1 });
+    t.testDb.close();
+  });
+});
+
 describe("authorization", () => {
   it("another user's approval → NOT_FOUND and nothing changes", async () => {
     const t = await setup();
