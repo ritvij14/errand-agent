@@ -57,7 +57,7 @@ Alice already has seeded bookings, so she's the best user for cancel and resched
 | 2   | Design note                      | [`docs/design-note.md`](docs/design-note.md)                                                           |
 | 3   | Eval table                       | [`docs/evals/eval-table.md`](docs/evals/eval-table.md)                                                 |
 | 4   | Three bugs with regression tests | [`docs/bugs.md`](docs/bugs.md)                                                                         |
-| 5   | Timeout-after-success trace      | [`traces/5993634e-0780-4a50-9882-c56114f26e3d.json`](traces/5993634e-0780-4a50-9882-c56114f26e3d.json) |
+| 5   | Timeout-after-success trace      | [`traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json`](traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json) |
 | 6   | Demo recording                   | see [`docs/submission-checklist.md`](docs/submission-checklist.md)                                     |
 
 ## Documentation

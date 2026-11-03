@@ -12,7 +12,7 @@
 
 ## Proof
 
-- Committed file: `traces/5993634e-0780-4a50-9882-c56114f26e3d.json` (12 events; un-ignored in `.gitignore`).
+- Committed file: `traces/783dbb24-0e44-4696-ac27-873308c3fe9d.json` (12 events, real `durationMs` on model/tool calls and `run_ended`; un-ignored in `.gitignore`).
 - One provider booking: `sqlite3 server/data/errand.db "SELECT COUNT(*) FROM mock_booking WHERE user_id='u-demo-alice' AND status='booked'"` rises by one.
 
 ## Gotchas

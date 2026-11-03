@@ -7,7 +7,10 @@ const clockOf = (now = FIX_NOW): Clock => createClock({ now });
 
 // Table rows (V-6): one row per phrase from the design + readings
 const ROWS: { phrase: string; expected: Partial<Omit<TimeWindow, "raw">>; note?: string }[] = [
-  { phrase: "this week, mornings only", expected: { dateFrom: "2026-11-02", dateTo: "2026-11-08", latest: "12:00" } },
+  {
+    phrase: "this week, mornings only",
+    expected: { dateFrom: "2026-11-02", dateTo: "2026-11-08", latest: "12:00" },
+  },
   { phrase: "Saturday", expected: { dateFrom: "2026-11-07", dateTo: "2026-11-07" } },
   { phrase: "not before 10 a.m.", expected: { earliest: "10:00" } },
   { phrase: "between 9 and 11am", expected: { earliest: "09:00", latest: "11:00" } },
@@ -17,6 +20,16 @@ const ROWS: { phrase: string; expected: Partial<Omit<TimeWindow, "raw">>; note?:
   { phrase: "anytime", expected: {} },
   { phrase: "after 4pm", expected: { earliest: "16:00" } },
   { phrase: "on 14 November", expected: { dateFrom: "2026-11-14", dateTo: "2026-11-14" } },
+  // regression (U39): a bare "evening" / "afternoon" was silently dropped → 08:00 slots offered
+  {
+    phrase: "Saturday evening",
+    expected: { dateFrom: "2026-11-07", dateTo: "2026-11-07", earliest: "17:00", latest: null },
+  },
+  { phrase: "evenings only", expected: { earliest: "17:00" } },
+  {
+    phrase: "tomorrow afternoon",
+    expected: { dateFrom: "2026-11-03", dateTo: "2026-11-03", earliest: "12:00", latest: "17:00" },
+  },
 ];
 
 describe("parseTimeWindow (V-6)", () => {
@@ -30,7 +43,6 @@ describe("parseTimeWindow (V-6)", () => {
       if (row.expected.dateTo !== undefined) expect(w.dateTo).toBe(row.expected.dateTo);
       if (row.expected.earliest !== undefined) expect(w.earliest).toBe(row.expected.earliest);
       if (row.expected.latest !== undefined) expect(w.latest).toBe(row.expected.latest);
-
     });
   }
 
@@ -47,7 +59,10 @@ describe("parseTimeWindow (V-6)", () => {
   it("a multi-day window said in the evening keeps every day's mornings (no 'now' bound)", () => {
     const evening = clockOf(new Date("2026-11-02T12:30:00Z")); // Mon 18:00 IST
     const result = parseTimeWindow("this week, mornings only", evening);
-    expect(result).toEqual({ ok: true, data: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: null, latest: "12:00" } });
+    expect(result).toEqual({
+      ok: true,
+      data: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: null, latest: "12:00" },
+    });
     const after = parseTimeWindow("this week after 11", evening);
     expect(after.ok && after.data.dateFrom).toBe("2026-11-02"); // today's 18:00+ slots still count
   });
@@ -70,7 +85,12 @@ describe("parseTimeWindow (V-6)", () => {
 
 describe("mergeCorrection (R9: partial time correction)", () => {
   it('"after 11" on a known window only moves the earliest bound, keeps dates', () => {
-    const known: TimeWindow = { dateFrom: "2026-11-07", dateTo: "2026-11-07", earliest: "08:00", latest: null };
+    const known: TimeWindow = {
+      dateFrom: "2026-11-07",
+      dateTo: "2026-11-07",
+      earliest: "08:00",
+      latest: null,
+    };
     const merged = mergeCorrection(known, "after 11", clockOf());
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;
@@ -80,7 +100,12 @@ describe("mergeCorrection (R9: partial time correction)", () => {
   });
 
   it('"Saturday" on a known window keeps bounds, replaces dates', () => {
-    const known: TimeWindow = { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: "10:00", latest: "12:00" };
+    const known: TimeWindow = {
+      dateFrom: "2026-11-02",
+      dateTo: "2026-11-08",
+      earliest: "10:00",
+      latest: "12:00",
+    };
     const merged = mergeCorrection(known, "make it Saturday", clockOf());
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;
@@ -91,6 +116,9 @@ describe("mergeCorrection (R9: partial time correction)", () => {
 
   it("a correction beyond the 14-day window → TIME_OUT_OF_RANGE", () => {
     const known: TimeWindow = { dateFrom: "2026-11-10", dateTo: "2026-11-10", earliest: null, latest: null };
-    expect(mergeCorrection(known, "make it 20 November", clockOf())).toMatchObject({ ok: false, error: TIME_OUT_OF_RANGE });
+    expect(mergeCorrection(known, "make it 20 November", clockOf())).toMatchObject({
+      ok: false,
+      error: TIME_OUT_OF_RANGE,
+    });
   });
 });

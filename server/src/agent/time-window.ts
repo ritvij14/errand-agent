@@ -10,19 +10,34 @@ import type { Clock } from "../shared/clock.js";
 export const TIME_OUT_OF_RANGE = "TIME_OUT_OF_RANGE";
 export const TIME_UNPARSEABLE = "TIME_UNPARSEABLE";
 
-export type TimeWindow = { dateFrom: string | null; dateTo: string | null; earliest: string | null; latest: string | null };
+export type TimeWindow = {
+  dateFrom: string | null;
+  dateTo: string | null;
+  earliest: string | null;
+  latest: string | null;
+};
 
 export type TimeResult = { ok: true; data: TimeWindow } | { ok: false; error: string };
 
 const istDay = (d: Date): string => {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" })
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
     .format(d)
     .split("-");
   return `${parts[0]}-${parts[1]}-${parts[2]}`;
 };
 
 const istHM = (d: Date): string =>
-  new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
 
 const hOf = (hour: string, meridiem?: string | null): string => {
   let h = Number(hour);
@@ -33,7 +48,9 @@ const hOf = (hour: string, meridiem?: string | null): string => {
 };
 
 // Scan our own qualifiers; return bounds and the remaining text for chrono.
-const scanQualifiers = (text: string): { earliest: string | null; latest: string | null; weekSpan: boolean; remaining: string } => {
+const scanQualifiers = (
+  text: string,
+): { earliest: string | null; latest: string | null; weekSpan: boolean; remaining: string } => {
   let earliest: string | null = null;
   let latest: string | null = null;
   let weekSpan = false;
@@ -42,7 +59,9 @@ const scanQualifiers = (text: string): { earliest: string | null; latest: string
     if (m) remaining = remaining.replace(m[0], " ");
   };
 
-  const between = remaining.match(/between\s+(\d{1,2})\s*(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?\s*and\s+(\d{1,2})\s*(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?/i);
+  const between = remaining.match(
+    /between\s+(\d{1,2})\s*(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?\s*and\s+(\d{1,2})\s*(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?/i,
+  );
   if (between) {
     earliest = hOf(between[1]!, between[2]);
     latest = hOf(between[3]!, between[5]);
@@ -58,9 +77,16 @@ const scanQualifiers = (text: string): { earliest: string | null; latest: string
     earliest = hOf(afterTime[1]!, afterTime[3]);
     cut(afterTime);
   }
-  if (/\b(tonight|this evening)\b/i.test(remaining)) {
+  const EVENING = /,?\s*\b(tonight|(?:this )?evenings?(?:\s*only)?)\b/i;
+  if (EVENING.test(remaining)) {
     earliest = earliest ?? "17:00";
-    cut(remaining.match(/\b(tonight|this evening)\b/i));
+    cut(remaining.match(EVENING));
+  }
+  const AFTERNOON = /,?\s*\b(?:this )?afternoons?(?:\s*only)?\b/i;
+  if (AFTERNOON.test(remaining)) {
+    earliest = earliest ?? "12:00";
+    latest = latest ?? "17:00";
+    cut(remaining.match(AFTERNOON));
   }
   if (/\bmornings?(\s*only)?\b/i.test(remaining)) {
     latest = "12:00";
@@ -90,7 +116,8 @@ export const parseTimeWindow = (text: string, clock: Clock): TimeResult => {
     const pastMarker = /\b(last|yesterday)\b/i.test(q.remaining);
     if (DAY_RE.test(q.remaining)) {
       // a named day means the NEXT occurrence (a bare "Saturday" on Monday is this week's)
-      if (day < today && !pastMarker) day = istDay(new Date(Date.parse(`${day}T00:00:00+05:30`) + 7 * 86_400_000));
+      if (day < today && !pastMarker)
+        day = istDay(new Date(Date.parse(`${day}T00:00:00+05:30`) + 7 * 86_400_000));
       window.dateFrom = day;
       window.dateTo = day;
       if (found.start.isCertain("hour")) window.earliest = window.earliest ?? istHM(found.start.date());
@@ -115,9 +142,10 @@ export const parseTimeWindow = (text: string, clock: Clock): TimeResult => {
 
   if (q.weekSpan) {
     // "this week": today (IST) through this Sunday (§2.3: 7 days of morning slots)
-    const weekday = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[
-      new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }).format(clock.now())
-    ] ?? 0;
+    const weekday =
+      { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[
+        new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }).format(clock.now())
+      ] ?? 0;
     const daysToSunday = (7 - weekday) % 7;
     window.dateFrom = today;
     window.dateTo = istDay(new Date(clock.now().getTime() + daysToSunday * 86_400_000));
@@ -135,7 +163,13 @@ export const parseTimeWindow = (text: string, clock: Clock): TimeResult => {
     }
     return { ok: false, error: TIME_OUT_OF_RANGE };
   }
-  if (window.dateFrom === today && window.dateTo === today && window.earliest && !pastMarker && window.earliest < istHM(clock.now())) {
+  if (
+    window.dateFrom === today &&
+    window.dateTo === today &&
+    window.earliest &&
+    !pastMarker &&
+    window.earliest < istHM(clock.now())
+  ) {
     // a time earlier today ("at 3pm") means the next 3pm, i.e. tomorrow — single-day
     // windows only: a range that starts today still has today's later slots
     const tomorrow = istDay(new Date(clock.now().getTime() + 86_400_000));

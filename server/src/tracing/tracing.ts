@@ -7,7 +7,7 @@ import type { Clock } from "../shared/clock.js";
 
 export const TRACE_EVENT_FIELDS: Record<string, string[]> = {
   run_started: ["trigger", "conversationId", "userId", "phase"],
-  model_call: ["job", "input", "output", "durationMs", "tokens", "cost", "notAvailable"],
+  model_call: ["job", "input", "output", "tokens", "cost", "notAvailable"],
   state_transition: ["fromPhase", "toPhase", "reason"],
   fact_changed: ["key", "oldValue", "newValue", "source", "isCorrection"],
   tool_call: [
@@ -19,7 +19,6 @@ export const TRACE_EVENT_FIELDS: Record<string, string[]> = {
     "errorCode",
     "transient",
     "result",
-    "durationMs",
     "suspectedInjection",
   ],
   approval_event: ["event", "via", "action", "providerId", "slot", "price", "voidReason", "approvalId"],
@@ -27,7 +26,8 @@ export const TRACE_EVENT_FIELDS: Record<string, string[]> = {
   memory_event: ["event", "key", "value", "service"],
   limit_hit: ["cap", "modelCalls", "toolCalls", "elapsedMs"],
   error: ["code", "internalDetails"],
-  run_ended: ["outcome", "modelCalls", "toolCalls", "durationMs"],
+  // countedMs: the run's time as the caps count it (real + simulated pauses, R8)
+  run_ended: ["outcome", "modelCalls", "toolCalls", "countedMs"],
 };
 
 export type TraceEvent = {

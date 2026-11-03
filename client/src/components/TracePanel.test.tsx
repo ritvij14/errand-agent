@@ -41,6 +41,7 @@ describe("the trace panel (MH-7, FR-13)", () => {
     expect(lines).toHaveLength(3);
     expect(lines[0]!.textContent).toContain("run_started");
     expect(lines[1]!.textContent).toContain("search_providers");
+    expect(lines[1]!.textContent).toContain("(4000 ms)"); // real latency, in ms
     expect(lines[2]!.textContent).toContain("choosing");
     // colours: each line carries a per-type style token
     expect(lines[1]!.className).toContain("trace-tool_call");

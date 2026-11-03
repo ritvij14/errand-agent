@@ -802,7 +802,7 @@ A trace is the ordered list of **events** of one run (2.5.3), stored in SQLite u
 | `memory_event`     | stated / inferred / confirmed / forgotten / used / blocked-by-forget                                                                    |
 | `limit_hit`        | which cap, counters at that moment                                                                                                      |
 | `error`            | code; for `unknown_error`, internal details (message, where it happened)                                                                |
-| `run_ended`        | outcome, model-call and tool-call counts, total `duration_ms`                                                                           |
+| `run_ended`        | outcome, model-call and tool-call counts, total `duration_ms` (real), `countedMs` (time as the caps count it: real + simulated pauses)   |
 
 **Tokens and cost:** "where available". The scripted model has neither, so they are recorded as `null` with `not_available: "scripted model"`. Phase 3 (OpenRouter) would fill real numbers.
 
@@ -819,7 +819,7 @@ The **full structured result** of every tool call is kept — ids, prices, every
 ##### Viewing and exporting
 
 - **Page:** after each reply the page loads that run's trace (FR-13) and shows it in the trace panel.
-  - **Timeline:** one line per event, coloured by type, e.g. `tool_call book → timeout (10.0 s)`, `state verifying → done`. Click a line to expand all its fields.
+  - **Timeline:** one line per event, coloured by type, e.g. `tool_call book → timeout (0 ms)`, `state verifying → done` (real latency in ms; the 10 s pause shows in `clock_at`). Click a line to expand all its fields.
   - **Which run:** the latest run is shown automatically; every agent reply has a small **trace** link that switches the panel to that reply's run — easy to jump back to the run where a timeout happened.
 - **Export:** a command writes one run's trace to a raw JSON file (`traces/<run id>.json`) — deliverable 5 ("one end-to-end trace, raw file").
 - **Access:** a user can only load traces of their own conversations (`NOT_FOUND` otherwise).

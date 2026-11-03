@@ -39,6 +39,30 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 - **Commit.** U23.
 - **Same cause, found again in U25.** `approval.flow.test.ts` "the Approve button approves the card's record…" failed once in a full run: its approve hit a random `slot_taken`, which (since U22) sends the workflow back to `choosing`. Its setup now forces every `book` to `ok` — that file is about the decision, not the booking result. Three full runs green after.
 
+### B5 — A fresh clone failed `npm test`
+
+- **What broke.** Following the README in a fresh `git clone` (U38 QA), `npm test` stopped at the evals: "Cannot open database because the directory does not exist".
+- **Why.** Each eval opens `server/data/eval-<id>.db`; `server/data/` is git-ignored, so it only existed in the working copy where the dev server had once created it.
+- **Fix.** `server/src/evals/eval.cli.ts`: `mkdir(server/data, { recursive: true })` before the first scenario. (The app's own start already did this since U37's `openAppDatabase`.)
+- **Regression check (red → green).** The clean-clone run itself: clone → `npm install` → `npm test` failed, then passed after the fix (`/tmp/errand-verify/clone-test.log`). No unit test — the failure needs a missing folder, which the README run checks.
+- **Commit.** `1c73cd6` (U38).
+
+### B6 — "Saturday evening" offered 08:00 slots
+
+- **What broke.** "reschedule my AC servicing to Saturday evening" offered 08:00, 09:00, 10:00 and 17:00. Found while checking the README's example prompts on the dev server (U38).
+- **Why.** The time parser only read "tonight" and "this evening". A bare "evening" (or "afternoon") was passed to chrono-node, which reads it as an implied hour, not a fixed one, so the code dropped it. The user's time constraint vanished without a word.
+- **Fix.** `server/src/agent/time-window.ts`: "(this) evening(s)(only)" / "tonight" → not before 17:00; "(this) afternoon(s)(only)" → 12:00–17:00.
+- **Regression tests (red → green).** `time-window.test.ts` rows "Saturday evening", "evenings only", "tomorrow afternoon" (3 red). The fix then turned `task-switch.flow.test.ts` "'yes' to the switch…" red: its "Saturday afternoon" had only found slots because "afternoon" was ignored. Ganesh Cooltech has no Saturday slot from 12:00 to 17:00, so the reply is now "no free slot in that time", which is correct. The test now says "Saturday evening".
+- **Commit.** U39.
+
+### B7 — Traces recorded no latency
+
+- **What broke.** MH-7 asks for latency in every trace; every committed trace event had `durationMs: null`. Found while checking the design note's claims against the deliverable-5 trace.
+- **Why.** `trace.record` takes the duration as its 3rd argument, but neither the tool gateway nor the conversation service ever passed one. `run_ended` put the cap budget's time (real plus the 10 s simulated pause) in a data field named `durationMs`, which looked like latency but wasn't.
+- **Fix.** `tool-gateway.ts` and `conversations.service.ts` time every tool call, model read/write and the run with the real elapsed timer. `run_ended`'s budget time is renamed `countedMs`.
+- **Regression test (red → green).** `booking.flow.test.ts` "the trace records real latency for every model and tool call, never the simulated 10 s pause" (red: `expected null to be type of 'number'`).
+- **Commit.** U39.
+
 ## Invariants found broken by tests
 
 _None yet._

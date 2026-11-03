@@ -22,7 +22,7 @@ const colourOf = (type: string): string =>
 const lineOf = (e: TraceView["events"][number]): string => {
   const d = e.data;
   if (e.type === "tool_call")
-    return `${String(d.tool ?? "")} → ${d.ok ? "ok" : String(d.errorCode ?? "?")}${e.durationMs ? ` (${(e.durationMs / 1000).toFixed(1)} s)` : ""}`;
+    return `${String(d.tool ?? "")} → ${d.ok ? "ok" : String(d.errorCode ?? "?")}${e.durationMs !== null ? ` (${e.durationMs} ms)` : ""}`;
   if (e.type === "state_transition") return `${String(d.fromPhase ?? "")} → ${String(d.toPhase ?? "")}`;
   if (e.type === "fact_changed")
     return `${String(d.key ?? "")}: ${String(d.oldValue ?? "—")} → ${String(d.newValue ?? "—")}`;

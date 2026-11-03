@@ -87,7 +87,7 @@ describe("switching tasks on an unfinished request (FR-15)", () => {
   it("'yes' to the switch abandons the old request and starts the new one", async () => {
     const t = setup();
     await t.say("book a plumber in Indiranagar");
-    await t.say("move my AC servicing to Saturday afternoon");
+    await t.say("move my AC servicing to Saturday evening"); // Ganesh Cooltech is free at 17:00
     const reply = await t.say("yes");
     expect(t.workflows()).toEqual([
       { intent: "book", phase: "abandoned" },

@@ -203,6 +203,24 @@ describe("execute and verify a booking", () => {
     expect(reply.message.text).toMatch(/^Booked:/);
     t.testDb.close();
   });
+
+  it("the trace records real latency for every model and tool call, never the simulated 10 s pause (MH-7)", async () => {
+    const t = setup("timeout_booked");
+    const { reply } = await t.approveFirstOption();
+    const events = readTrace(t.testDb.db, reply.runId);
+    const timed = events.filter(
+      (e) => e.type === "tool_call" || e.type === "model_call" || e.type === "run_ended",
+    );
+    expect(timed.map((e) => e.type)).toEqual(["tool_call", "tool_call", "model_call", "run_ended"]); // a button approval has no read
+    for (const e of timed) {
+      expect(e.durationMs).toBeTypeOf("number");
+      expect(e.durationMs!).toBeGreaterThanOrEqual(0);
+      expect(e.durationMs!).toBeLessThan(5_000); // real time, while clock_at jumped 10 s
+    }
+    // the run's time as the caps count it (simulated pauses included) stays visible
+    expect((events.at(-1)!.data as { countedMs: number }).countedMs).toBeGreaterThanOrEqual(10_000);
+    t.testDb.close();
+  });
 });
 
 describe("repeated yes and overlapping messages (MH-3, § 2.5.6, § 2.3)", () => {

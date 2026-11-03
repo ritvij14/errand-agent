@@ -6,6 +6,7 @@ import { authorizeWrite, operationRepo } from "../booking/index.js";
 import { createWorkflowStore as createConversationWorkflow, type ApplyOutcome } from "../agent/workflow.js";
 import type { AgentModel, ReadResult } from "../agent/index.js";
 import { CAPS, CapHit, createRunBudget, type CapCode, type Caps } from "../shared/run-budget.js";
+import { createElapsed } from "../shared/elapsed.js";
 import {
   createMockSettings,
   createToolGateway,
@@ -91,15 +92,22 @@ export const createConversationService = (deps: ConversationsDeps) => {
       phase: workflowStore.getActiveWorkflow(conversationId)?.phase ?? "none",
     });
     const budget = createRunBudget({ caps });
+    // trace durations are real latency (MH-7); the budget's time also counts simulated pauses
+    const runElapsed = createElapsed();
     // every model call goes through the run's caps and is raced against the time left (R8)
     const countedModel: AgentModel = {
       read: async (job) => {
         budget.beforeModelCall();
+        const elapsed = createElapsed();
         const result: ReadResult =
           forced.take("model_read", 0)?.outcome === "unusable"
             ? { kind: "unusable" }
             : await budget.race(model.read(job));
-        trace.record("model_call", { job: "read", input: job.text, output: result.kind });
+        trace.record(
+          "model_call",
+          { job: "read", input: job.text, output: result.kind },
+          Math.round(elapsed.ms()),
+        );
         return result;
       },
       write: async (job) => {
@@ -171,9 +179,10 @@ export const createConversationService = (deps: ConversationsDeps) => {
         const outcome = await step(userMessage?.text ?? "");
         // the write job: when the code already decided the wording it still counts as the run's write
         if (outcome.reply) budget.beforeModelCall();
+        const writeElapsed = createElapsed();
         const text =
           outcome.reply || (await countedModel.write({ purpose: outcome.code ?? "help", state: {} }));
-        trace.record("model_call", { job: "write", output: text });
+        trace.record("model_call", { job: "write", output: text }, Math.round(writeElapsed.ms()));
         ending = { outcome: runOutcomeOf(outcome.code), text, parts: (outcome.parts ?? []) as ReplyPart[] };
       } catch (error) {
         if (error instanceof SimulatedCrash) throw error; // the process is gone: nothing more runs
@@ -198,12 +207,16 @@ export const createConversationService = (deps: ConversationsDeps) => {
       const used = budget.used();
       const endedAt = clock.now().getTime();
       repo.finishRun(run.id, ending.outcome, endedAt, used.modelCalls, used.toolCalls);
-      trace.record("run_ended", {
-        outcome: ending.outcome,
-        modelCalls: used.modelCalls,
-        toolCalls: used.toolCalls,
-        durationMs: used.elapsedMs,
-      });
+      trace.record(
+        "run_ended",
+        {
+          outcome: ending.outcome,
+          modelCalls: used.modelCalls,
+          toolCalls: used.toolCalls,
+          countedMs: used.elapsedMs,
+        },
+        Math.round(runElapsed.ms()),
+      );
       const saved = repo.addMessage(conversationId, run.id, "agent", ending.text, ending.parts, endedAt);
       return { ok: true, reply: toReply({ ...run, outcome: ending.outcome }, saved) };
     } finally {

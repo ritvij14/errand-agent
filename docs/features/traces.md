@@ -7,11 +7,12 @@
 - `trace_event` table (`migrations/003_trace_events.sql`) — one ordered event list per run; every trace write goes through `TRACE_EVENT_FIELDS` allow-lists in `tracing.ts`, so by construction no password, session token or cookie can be stored (I-9).
 - `server/src/tracing/trace.routes.ts` — `GET /api/runs/:id/trace`: the run row + its ordered events; only the run's own conversation's user (V-7: 404 otherwise), 401 unauthenticated. Mounted in `app.ts`.
 - `server/src/tracing/export.ts` — `exportTrace` (run + events, exactly as stored) and `writeTraceFile`.
-- `npm run trace:export -- <run id>` (`trace-export.cli.ts`) — deliverable 5: writes `traces/<run id>.json` from the app database (server/data/errand.db). `traces/` is git-ignored.
+- `npm run trace:export -- <run id>` (`trace-export.cli.ts`) — deliverable 5: writes `traces/<run id>.json` from the app database (server/data/errand.db). `traces/` is git-ignored except the committed deliverable file.
+- **Latency (U39, MH-7).** The event's `duration_ms` column is **real** elapsed time (the `shared/elapsed.ts` timer): measured around every tool call in the gateway, every model read/write in the conversation service, and the whole run (`run_ended`). It is never the simulated pause — that shows as a `clock_at` jump. In-process mock tools take < 1 ms, so they record `0`. `run_ended.data.countedMs` is the run's time **as the caps count it** (real + simulated pauses and waits, R8), e.g. 10003 for a run with one 10 s timeout. Before U39 no event carried latency (`durationMs: null` everywhere) — found while writing the design note.
 
 ## The client panel (FR-13)
 
-- `components/TracePanel.tsx` — a right-hand column in Chat: the run's outcome + model/tool call counts, then one timeline line per event coloured by type (`tool_call book → timeout (10.0 s)`, `state searching → choosing`, …). A line expands to its raw fields (JSON); a second click collapses it.
+- `components/TracePanel.tsx` — a right-hand column in Chat: the run's outcome + model/tool call counts, then one timeline line per event coloured by type (`tool_call book → timeout (0 ms)`, `state searching → choosing`, …; latency in ms). A line expands to its raw fields (JSON); a second click collapses it.
 - **Which run:** the latest agent reply's run loads automatically (`useTrace`); every agent reply that has a run shows a small "trace" link that switches the panel to that reply's run (`shownRunId = traceRunId ?? latestRunId`). A finished run's trace doesn't change (`staleTime: 60 s`, `retry: false` — a 404 for a foreign run shows the quiet placeholder).
 
 ## Invariants

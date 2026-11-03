@@ -14,6 +14,7 @@ import {
 
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
 import { createRunBudget, type RunBudget } from "../shared/run-budget.js";
+import { createElapsed } from "../shared/elapsed.js";
 
 // The tool gateway (§ 2.5.4): the agent's ONLY way to the provider API. Bound to one
 // signed-in user and one run (trace + tool budget). Write tools are fail-closed: they
@@ -88,16 +89,15 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
     shape: (data: T) => boolean,
   ): ToolResult<T> => {
     budget.beforeToolCall(); // a cap stops the run before the call is made (CapHit)
+    const elapsed = createElapsed(); // real latency (MH-7); the mock's pauses are on the clock
     const raw = call();
+    const latencyMs = Math.round(elapsed.ms());
     if (raw.ok && !shape(raw.data)) {
-      trace.record("tool_call", {
-        tool,
-        args,
-        attempt: 1,
-        ok: false,
-        errorCode: "PROVIDER_BAD_RESPONSE",
-        transient: false,
-      });
+      trace.record(
+        "tool_call",
+        { tool, args, attempt: 1, ok: false, errorCode: "PROVIDER_BAD_RESPONSE", transient: false },
+        latencyMs,
+      );
       return { ok: false, error: "PROVIDER_BAD_RESPONSE", transient: false };
     }
     let suspectedInjection: boolean | undefined;
@@ -111,16 +111,20 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
     } else {
       resultString = `error: ${raw.error}`;
     }
-    trace.record("tool_call", {
-      tool,
-      args,
-      attempt: 1,
-      ok: raw.ok,
-      errorCode: raw.ok ? null : raw.error,
-      transient: raw.ok ? null : raw.transient,
-      result: resultString,
-      suspectedInjection,
-    });
+    trace.record(
+      "tool_call",
+      {
+        tool,
+        args,
+        attempt: 1,
+        ok: raw.ok,
+        errorCode: raw.ok ? null : raw.error,
+        transient: raw.ok ? null : raw.transient,
+        result: resultString,
+        suspectedInjection,
+      },
+      latencyMs,
+    );
     budget.checkTime(); // R8: re-checked the moment the call returns
     return raw as ToolResult<T>;
   };

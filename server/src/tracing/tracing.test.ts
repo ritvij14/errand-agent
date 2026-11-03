@@ -17,8 +17,8 @@ describe("recording", () => {
     const trace = startTrace(db, clock, "run-1");
     trace.record("run_started", { trigger: "message" });
     clock.advanceMs(1200);
-    trace.record("model_call", { job: "read", output: "ok", durationMs: 4, tokens: null, cost: null });
-    trace.record("run_ended", { outcome: "completed", modelCalls: 1, toolCalls: 0, durationMs: 9 });
+    trace.record("model_call", { job: "read", output: "ok", tokens: null, cost: null }, 4);
+    trace.record("run_ended", { outcome: "completed", modelCalls: 1, toolCalls: 0, countedMs: 9 }, 9);
     const events = readTrace(db, "run-1");
     expect(events.map((e) => e.seq)).toEqual([1, 2, 3]);
     expect(events.map((e) => e.type)).toEqual(["run_started", "model_call", "run_ended"]);
