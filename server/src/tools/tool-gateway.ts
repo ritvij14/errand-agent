@@ -13,6 +13,7 @@ import {
 } from "./read-tools.js";
 
 import { DEFAULT_SEED, type MockSettings } from "./settings.js";
+import { AREAS, SERVICES } from "./mock-world.js";
 import { createRunBudget, type RunBudget } from "../shared/run-budget.js";
 import { createElapsed } from "../shared/elapsed.js";
 
@@ -40,6 +41,19 @@ const cleanReviews = (reviews: { text: string; suspectedInjection?: boolean }[])
   }
   return { suspected };
 };
+
+// § 2.5.7 rule 7: every result is checked for types, ranges and allowed values before
+// anything uses it; a mismatch is PROVIDER_BAD_RESPONSE and nothing from it is used.
+const isText = (v: unknown): v is string => typeof v === "string";
+const isRupees = (v: unknown): boolean => Number.isInteger(v) && (v as number) > 0;
+const isRating = (v: unknown): boolean => typeof v === "number" && v >= 0 && v <= 5;
+const isSlot = (v: unknown): boolean => isText(v) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) && !Number.isNaN(Date.parse(v));
+const isService = (v: unknown): boolean => SERVICES.includes(v as never);
+const isArea = (v: unknown): boolean => AREAS.includes(v as never);
+const isObject = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v);
+const isProviderCore = (p: Record<string, unknown> | undefined): boolean =>
+  !!p && isText(p.id) && isText(p.name) && isRupees(p.price) && isRating(p.rating) && isObject(p.attributes);
+const BOOKING_STATUSES = ["booked", "cancelled", "completed"];
 
 export type CreateGatewayOpts = {
   db: Db;
@@ -142,15 +156,23 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         { ...args },
         () => searchProviders(db, toolOpts, args),
         (d) =>
-          Array.isArray(d.providers) &&
-          d.providers.every((p) => typeof p?.id === "string" && Array.isArray(p.slots)),
+          Array.isArray(d?.providers) &&
+          d.providers.every(
+            (p) => isProviderCore(p as never) && Array.isArray(p.slots) && p.slots.every(isSlot),
+          ),
       ),
     getProvider: (providerId: string): ToolResult<ProviderDetails> =>
       budgeted(
         "get_provider",
         { providerId },
         () => getProvider(db, toolOpts, providerId) as ToolResult<ProviderDetails>,
-        (d) => Array.isArray(d.reviews),
+        (d) =>
+          isProviderCore(d as never) &&
+          isService(d.service) &&
+          Array.isArray(d.areas) &&
+          d.areas.every(isArea) &&
+          Array.isArray(d.reviews) &&
+          d.reviews.every((r) => isText(r?.text)),
       ),
     listBookings: (): ToolResult<{ bookings: BookingRecord[] }> =>
       budgeted(
@@ -161,8 +183,18 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
             ? opts.broken.listBookings(db, toolOpts, userId)
             : listBookings(db, toolOpts, userId),
         (d) =>
-          Array.isArray(d.bookings) &&
-          d.bookings.every((b) => typeof b?.id === "string" && typeof b?.price === "number"),
+          Array.isArray(d?.bookings) &&
+          d.bookings.every(
+            (b) =>
+              isText(b?.id) &&
+              isText(b.providerId) &&
+              isText(b.providerName) &&
+              isService(b.service) &&
+              isArea(b.area) &&
+              isSlot(b.slot) &&
+              isRupees(b.price) &&
+              BOOKING_STATUSES.includes(b.status),
+          ),
       ),
     holdSlot: (args: {
       providerId: string;
@@ -172,14 +204,16 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         "hold_slot",
         { ...args },
         () => holdSlot(db, toolOpts, userId, args),
-        (d) => typeof d?.holdId === "string" && typeof d?.quotedPrice === "number",
+        (d) =>
+          isText(d?.holdId) && isSlot(d.slot) && isRupees(d.quotedPrice) && typeof d.expiresAt === "number",
       ),
     getBookingStatus: (idempotencyKey: string): ToolResult<{ status: string; bookingId?: string }> =>
       budgeted(
         "get_booking_status",
         { idempotencyKey },
         () => getBookingStatus(db, toolOpts, idempotencyKey),
-        (d) => typeof d?.status === "string",
+        (d) =>
+          (d?.status === "booked" && isText(d.bookingId)) || d?.status === "not_found" || d?.status === "failed",
       ),
     // ——— fail-closed writes (MH-2): executable only through booking operations (R1) ———
     book: (args: { holdId: string; idempotencyKey: string }): ToolResult<{ bookingId: string }> =>
@@ -208,7 +242,11 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
           opts.authorizeWrite?.("reschedule", { ...args })
             ? reschedule(db, toolOpts, userId, args)
             : refuse(),
-        (d) => typeof d?.booking?.id === "string",
+        (d) =>
+          isText(d?.booking?.id) &&
+          isSlot(d.booking.slot) &&
+          isRupees(d.booking.price) &&
+          BOOKING_STATUSES.includes(d.booking.status),
       ),
   };
 };

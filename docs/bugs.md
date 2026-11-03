@@ -125,6 +125,19 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/shared/clock.ts`: with no fixed time the clock returns the real time on every read, and `advanceMs` / `setNow` are ignored, so simulated pauses never push the app ahead of real time (operator's choice: strict real time). The pauses still count toward the 60 s cap through `run-budget.ts`. Deliverable-5 trace re-exported from a live run: `traces/61943514-4f6e-487c-8e2c-c53af40a62fe.json`.
 - **Regression tests (red → green).** `shared/clock.test.ts` "the default clock keeps following real time after it is created" (red: moved 0 ms); "the default clock stays on real time: a simulated pause (advanceMs) doesn't push it ahead" (red: 10 000 ms ahead).
 
+### B15 — A provider name could be read as a user command
+
+- **What broke.** Confirm on a slot sends `pickText` ("Book {provider} on {slot}") as a chat message. The scripted model checked drop / memory / details / cancel patterns before matching a pick, so a provider named "Cancel-Free Fixers" started a cancel instead of picking the slot — provider-side free text changing intent (MH-4, § 2.5.7 rule 1). A name like "I Live In Whitefield Fixers" would have reached the memory-save pattern the same way.
+- **Why.** Provider names are untrusted free text, but rule 1 was only enforced for reviews; names come back to the server inside the user's own message.
+- **Fix.** `server/src/agent/model.ts` `withoutProviderNames`: every shown provider name is blanked before any intent pattern runs; only the pick and the details lookup match names against the raw text.
+- **Regression test (red → green).** `agent/provider-details.flow.test.ts` "a provider name that reads like a command is only a name: Confirm on its slot picks it and nothing else" (red: "Cancel-Free Fixers" got no approval card). Found in a design-vs-code review, not a live report; today's seeded names are harmless.
+
+### B16 — The shape check let wrong values through
+
+- **What broke.** § 2.5.7 rule 7 promises types, ranges and allowed values, but the gateway only checked a few fields (ids are text, slots a list, `quotedPrice` a number). A rating of 50, a price of −₹100, an unknown service or booking status, or a slot like "tomorrow, trust me" passed and would have been shown or used.
+- **Fix.** `server/src/tools/tool-gateway.ts`: per-tool checks — prices positive whole rupees, ratings 0–5, slots ISO times, service / area / booking status from the fixed lists, every review text a string, `get_booking_status` `booked` only with a booking id.
+- **Regression tests (red → green).** `tools/tool-gateway.test.ts` "a search result with a rating outside 0–5 is refused", "… a price that isn't a positive whole number of rupees is refused", "provider details with a service outside the mock world are refused", "a booking with an unknown status or a slot that isn't a time is refused" (all four red before the fix).
+
 ## Invariants found broken by tests
 
 _None yet._

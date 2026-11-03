@@ -219,11 +219,25 @@ const readDecisionWithChange = async (rest: string, clock: Clock): Promise<ReadR
   return r;
 };
 
+/**
+ * The message with every shown provider name blanked out.
+ * @remarks Provider names are provider-side free text (MH-4, § 2.5.7 rule 1). They come back
+ * inside a slot's `pickText`, so intent patterns (cancel, memory, details…) read this copy and
+ * a name like "Cancel-Free Fixers" can never start an action. Only the pick and the
+ * details lookup match names, against the original text.
+ */
+const withoutProviderNames = (text: string, options?: OptionBlock[]): string =>
+  (options ?? []).reduce(
+    (rest, b) => rest.replace(new RegExp(b.provider.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
+    text,
+  );
+
 export const readUserMessage = async (
-  text: string,
+  rawText: string,
   clock: Clock,
   options?: OptionBlock[],
 ): Promise<ReadResult> => {
+  const text = withoutProviderNames(rawText, options);
   const drop = readDrop(text);
   if (drop) return drop;
   if (PLAIN_YES.test(text)) return { kind: "decision", decision: "yes" };
@@ -245,7 +259,7 @@ export const readUserMessage = async (
       const ordinal = /provider\s+(\d+)/i.exec(text);
       if (ordinal) providerId = options[Number(ordinal[1]) - 1]?.provider.id;
       if (!providerId) {
-        const lower = text.toLowerCase();
+        const lower = rawText.toLowerCase();
         providerId = [...options]
           .sort((a, b) => b.provider.name.length - a.provider.name.length)
           .find((b) => lower.includes(b.provider.name.toLowerCase()))?.provider.id;
@@ -256,7 +270,7 @@ export const readUserMessage = async (
   if (CANCEL_RE.test(text)) return { kind: "cancel" };
   if (LIST_BOOKINGS_RE.test(text)) return { kind: "list_bookings" };
 
-  const pick = options ? readPick(text, options, clock) : undefined;
+  const pick = options ? readPick(rawText, options, clock) : undefined;
   if (pick) return pick;
   if (VAGUE_PICK_RE.test(text)) return { kind: "pick_unclear" };
   if (RESCHEDULE_RE.test(text)) {

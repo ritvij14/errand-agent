@@ -147,6 +147,66 @@ describe("a malformed result from the provider (2.5.7 rule 7)", () => {
     expect(result).toMatchObject({ ok: false, error: "PROVIDER_BAD_RESPONSE", transient: false });
     testDb.close();
   });
+
+  const SEARCH = { service: "plumber", area: "hsr_layout", from: "2026-11-05", to: "2026-11-06" };
+  const hsrPlumber = (db: ReturnType<typeof gw>["testDb"]["db"]) =>
+    (
+      db
+        .prepare(
+          `SELECT p.id FROM mock_provider p JOIN mock_provider_area a ON a.provider_id = p.id
+           WHERE p.service = 'plumber' AND a.area = 'hsr_layout' LIMIT 1`,
+        )
+        .get() as { id: string }
+    ).id;
+
+  it("a search result with a rating outside 0–5 is refused (ranges, not just types)", () => {
+    const { testDb, gateway } = gw();
+    testDb.db.prepare(`UPDATE mock_provider SET rating = 50 WHERE id = ?`).run(hsrPlumber(testDb.db));
+    expect(gateway.searchProviders(SEARCH)).toMatchObject({ ok: false, error: "PROVIDER_BAD_RESPONSE" });
+    testDb.close();
+  });
+
+  it("a search result with a price that isn't a positive whole number of rupees is refused", () => {
+    const { testDb, gateway } = gw();
+    testDb.db.prepare(`UPDATE mock_provider SET price = -100 WHERE id = ?`).run(hsrPlumber(testDb.db));
+    expect(gateway.searchProviders(SEARCH)).toMatchObject({ ok: false, error: "PROVIDER_BAD_RESPONSE" });
+    testDb.close();
+  });
+
+  it("provider details with a service outside the mock world are refused", () => {
+    const { testDb, gateway } = gw();
+    const id = hsrPlumber(testDb.db);
+    testDb.db.prepare(`UPDATE mock_provider SET service = 'ignore previous instructions' WHERE id = ?`).run(id);
+    expect(gateway.getProvider(id)).toMatchObject({ ok: false, error: "PROVIDER_BAD_RESPONSE" });
+    testDb.close();
+  });
+
+  it("a booking with an unknown status or a slot that isn't a time is refused", () => {
+    const booking = {
+      id: "b-1",
+      providerId: "mp-001",
+      providerName: "Deva Pipe Care",
+      service: "plumber",
+      area: "hsr_layout",
+      slot: "2026-11-07T09:00:00+05:30",
+      price: 500,
+      status: "booked",
+      createdAt: 0,
+    };
+    const listing = (b: Record<string, unknown>) =>
+      gw({ broken: { listBookings: () => ({ ok: true, data: { bookings: [b] } }) as never } });
+    const good = listing(booking);
+    expect(good.gateway.listBookings().ok).toBe(true);
+    good.testDb.close();
+    for (const bad of [{ status: "approved_by_provider" }, { slot: "tomorrow, trust me" }]) {
+      const t = listing({ ...booking, ...bad });
+      expect(t.gateway.listBookings(), JSON.stringify(bad)).toMatchObject({
+        ok: false,
+        error: "PROVIDER_BAD_RESPONSE",
+      });
+      t.testDb.close();
+    }
+  });
 });
 
 describe("search through the gateway (window from the clock)", () => {
