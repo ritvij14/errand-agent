@@ -2,7 +2,7 @@
 
 > Working design doc. No page limit. The graded 2-page note (deliverable 2) is written later as `docs/design-note.md`, condensed from this doc.
 > Governing brief: [`problem-statement.md`](problem-statement.md). If this doc and the brief disagree, the brief wins.
-> Last updated: 2026-11-02
+> Last updated: 2026-11-03
 
 ---
 
@@ -69,7 +69,7 @@ What the system must do. **Source** says where each one comes from: the brief, o
 
 | ID    | Requirement                                                                                                                                                                                                                                                                                                                                                                                                                                        | Source                      |
 | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| NFR-1 | **Hard caps per run:** at most 6 model calls, 10 tool calls, 60 seconds. Hitting any cap stops the run, saves state, and replies with what was and wasn't done and which limit was hit. The 60-second cap is measured with the same controllable clock as everything else, so tests can trigger it without waiting.                                                                                                                                | Brief MH-5 + Decision       |
+| NFR-1 | **Hard caps per run:** at most 6 model calls, 10 tool calls, 60 seconds. Hitting any cap stops the run, saves state, and replies with what was and wasn't done and which limit was hit. The 60-second cap is measured with an injected elapsed timer plus the run's simulated pauses and waits — not the calendar clock (R8, § 2.5.3) — so tests trigger it with forced long timeouts, without real waiting, and a clock advance can't satisfy it.                                                                                                                                | Brief MH-5 + Decision       |
 | NFR-2 | **Retries:** a call that fails with a temporary error (timeout, 503) is tried at most 3 times, waiting 0.5 s then 1 s, always with the same idempotency key. A `book` timeout always goes through `get_booking_status` before any retry. After the last attempt, stop with a clear message. Waits count toward the 60-second cap.                                                                                                                  | Brief MH-3, MH-5 + Decision |
 | NFR-3 | **Not retried — these are answers, not glitches:** `slot_unavailable`, `slot_taken`, `slot_conflict` send the workflow back to `choosing`; `hold_expired` triggers a re-hold (2.5.2).                                                                                                                                                                                                                                                              | Reading                     |
 | NFR-4 | **Reproducible:** mock randomness comes from a seeded generator (fixed default seed, configurable). Evals can also force exact outcomes per call (e.g. "next `book`: timeout, but actually booked"). Same seed + same inputs = same results.                                                                                                                                                                                                       | Brief — Tool environment    |
@@ -418,7 +418,6 @@ Each ends with a clear reply (MH-5, FR-14) and is recorded as the run's `outcome
 | `unknown_error`                                   | Something not in the catalogue             | Wording comes from the operation's **checked status** (2.5.6), never a hopeful default: provider record absent → "Nothing was booked."; found succeeded → report the booking; unreadable → "Something went wrong on our side. I couldn't confirm whether it went through — don't book again yet." (R5). Full details go to the trace, never to the user. The conversation continues from the last saved state. |
 | `retries_exhausted`                               | 3 attempts used (NFR-2)                    | What failed, wording from the operation's checked status (R5), and the concrete next step — never a promised automatic follow-up we don't perform.                                                                                                                           |
 | `error`                                           | A **known** error from the catalogue below | That error's own message                                                                                                                                                                                                                                                     |
-| `unknown_error`                                   | Something not in the catalogue             | Wording comes from the operation's **checked status** (2.5.6), never a hopeful default: provider record absent → "Nothing was booked."; found succeeded → report the booking; unreadable → "Something went wrong on our side. I couldn't confirm whether it went through — don't book again yet." (R5). Full details go to the trace, never to the user. The conversation continues from the last saved state. |
 
 ##### Error catalogue — errors are known
 
@@ -529,7 +528,7 @@ All in one config file. Evals override some values so they run fast and test exa
 | `cancel` first call per booking  | 503                                                                                        | 503                                                     | Brief  |
 | Timeout pause                    | ~10 s — a visible stall in the demo; two timeouts in one run (20 s) still fit the 60 s cap | 0 real seconds (controllable clock)                     | Q3     |
 | Retry waits                      | 0.5 s, then 1 s                                                                            | same lengths on the controllable clock, no real waiting | NFR-2  |
-| Run time cap                     | 60 s                                                                                       | 60 s on the controllable clock                          | NFR-1  |
+| Run time cap                     | 60 s                                                                                       | 60 s of elapsed time + simulated pauses (R8), not the calendar clock | NFR-1  |
 | Forced outcomes queue            | **Dev/demo only (off by default):** a settings flag enables queuing the next call of a tool, so the demo can show a forced timeout-after-success live (deliverables 5–6). Evals use their own forced-outcome queue and never read this flag | n/a — evals force outcomes through the runner | R12    |
 
 ##### Tool gateway
@@ -864,7 +863,7 @@ Assertions on stored state and traces, never on reply wording:
 | I-1  | No booking on the provider side without a **used** approval whose action, provider, slot and price match it — **scoped to agent-created bookings (R10)**: seeded historical bookings and mock bookings made for "someone else taking the slot" carry no approval by design |
 | I-2  | At most one provider-side booking per approval and per operation — no duplicates                                         |
 | I-3  | No reply reports a booking as done unless that operation is `succeeded` **after** a `get_booking_status` saying `booked` |
-| I-4  | No run exceeds a cap (model calls ≤ 6, tool calls ≤ 10, clock time ≤ 60 s)                                               |
+| I-4  | No run exceeds a cap (model calls ≤ 6, tool calls ≤ 10, calendar-clock span ≤ 60 s). The time part is a backstop on the run's stored start/end times; the cap itself is enforced on elapsed time + simulated pauses (2.5.3) |
 | I-5  | Every run ends with a non-empty reply and a recorded outcome                                                             |
 | I-6  | A forgotten memory fact is never used and never re-inferred                                                              |
 | I-7  | An inferred fact is never used before it is confirmed                                                                    |
