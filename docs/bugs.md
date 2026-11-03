@@ -138,6 +138,12 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/tools/tool-gateway.ts`: per-tool checks — prices positive whole rupees, ratings 0–5, slots ISO times, service / area / booking status from the fixed lists, every review text a string, `get_booking_status` `booked` only with a booking id.
 - **Regression tests (red → green).** `tools/tool-gateway.test.ts` "a search result with a rating outside 0–5 is refused", "… a price that isn't a positive whole number of rupees is refused", "provider details with a service outside the mock world are refused", "a booking with an unknown status or a slot that isn't a time is refused" (all four red before the fix).
 
+### B17 — Only the preferred provider was ever inferred
+
+- **What broke.** § 2.5.8 infers `area` (same area in 2 completed bookings) and `earliest_time` (same "not before X" twice), but only `preferred_provider` was built: a user with two Jayanagar bookings was simply asked "which area?".
+- **Fix.** `server/src/agent/workflow.ts` `proposeFromHistory` → `proposeArea` / `proposeEarliestTime` (one proposal per request, provider → area → time; same `awaiting_confirmation` → yes/no path); `decideMemoryConfirm` applies a confirmed earliest time to the window; a detail the user names while the ask waits wins and drops the ask.
+- **Regression tests (red → green).** `agent/memory.flow.test.ts` "two completed bookings in one area propose that area…", "the same 'not before 10' in two finished bookings proposes an earliest time…" (both red); guards green from the start: "'no' to the proposed area forgets it…", "an area the user names while the proposal waits wins…", "a request that gives its own earliest time is not asked…". Found in a design-vs-code review.
+
 ## Invariants found broken by tests
 
 _None yet._

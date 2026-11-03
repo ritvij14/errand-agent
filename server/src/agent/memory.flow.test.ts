@@ -132,6 +132,143 @@ describe("inferred preferred provider (U33, V-12, R9)", () => {
   });
 });
 
+describe("inferred area and earliest time (2.5.8: same value twice)", () => {
+  const addCompleted = (
+    t: ReturnType<typeof setup>,
+    id: string,
+    service: string,
+    area: string,
+    slot: string,
+  ) =>
+    t.testDb.db
+      .prepare(
+        `INSERT INTO mock_booking (id, user_id, provider_id, service, area, slot, price, status, cancel_503_served, created_at, updated_at)
+         VALUES (?, ?, (SELECT id FROM mock_provider WHERE service = ? LIMIT 1), ?, ?, ?, 500, 'booked', 0, 0, 0)`,
+      )
+      .run(id, ALICE, service, service, area, slot);
+  const twoInJayanagar = (t: ReturnType<typeof setup>) => {
+    addCompleted(t, "mb-j1", "plumber", "jayanagar", "2026-10-20T09:00:00+05:30");
+    addCompleted(t, "mb-j2", "carpentry", "jayanagar", "2026-10-28T11:00:00+05:30");
+  };
+  // two finished bookings whose request said "not before 10" (the user's own detail, not memory)
+  const twoNotBefore10 = (t: ReturnType<typeof setup>) => {
+    for (const [i, slot] of ["2026-10-21T10:00:00+05:30", "2026-10-29T11:00:00+05:30"].entries()) {
+      const conversationId = t.conversation().id;
+      const facts = {
+        service: { value: "plumber", source: "user", updatedAt: 0 },
+        area: { value: "hsr_layout", source: "user", updatedAt: 0 },
+        time_window: {
+          value: { dateFrom: slot.slice(0, 10), dateTo: slot.slice(0, 10), earliest: "10:00", latest: null },
+          source: "user",
+          updatedAt: 0,
+        },
+      };
+      t.testDb.db
+        .prepare(
+          `INSERT INTO workflow (id, conversation_id, user_id, intent, phase, facts, selection, version, created_at, updated_at)
+           VALUES (?, ?, ?, 'book', 'done', ?, ?, 5, ?, ?)`,
+        )
+        .run(
+          `wf-old-${i}`,
+          conversationId,
+          ALICE,
+          JSON.stringify(facts),
+          JSON.stringify({ providerId: "x", slot }),
+          i,
+          i,
+        );
+    }
+  };
+
+  it("two completed bookings in one area propose that area; it isn't used until 'yes', then it fills the request", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    const reply = await c.say("book a plumber this week");
+    expect(reply.message.text).toMatch(/last two bookings were in Jayanagar/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([
+      expect.objectContaining({
+        key: "area",
+        value: "jayanagar",
+        source: "inferred",
+        status: "awaiting_confirmation",
+      }),
+    ]);
+    expect(memory.view(t.testDb.db, ALICE)[0]!.evidence).toMatch(/Jayanagar/);
+    expect(t.facts(c.id).area).toBeUndefined(); // I-7: never used before the yes
+
+    await c.say("yes");
+    expect(memory.state(t.testDb.db, ALICE, "area")).toMatchObject({
+      value: "jayanagar",
+      source: "inferred",
+    });
+    expect(t.facts(c.id).area).toMatchObject({ value: "jayanagar", source: "memory" });
+    expect(t.phases(c.id).at(-1)).toBe("choosing");
+    t.testDb.close();
+  });
+
+  it("'no' to the proposed area forgets it, and it is never proposed again (V-12)", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    await c.say("book a plumber this week");
+    await c.say("no");
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([]);
+    const again = await t.conversation().say("book a plumber this week");
+    expect(again.message.text).not.toMatch(/last two bookings were in/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([]);
+    t.testDb.close();
+  });
+
+  it("an area the user names while the proposal waits wins; a later 'yes' never swaps it for the proposed one", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    await c.say("book a plumber this week");
+    await c.say("in HSR Layout");
+    expect(t.facts(c.id).area).toMatchObject({ value: "hsr_layout", source: "user" });
+    await c.say("yes");
+    expect(t.facts(c.id).area).toMatchObject({ value: "hsr_layout", source: "user" });
+    expect(memory.state(t.testDb.db, ALICE, "area")).toBeUndefined();
+    t.testDb.close();
+  });
+
+  it("the same 'not before 10' in two finished bookings proposes an earliest time; 'yes' bounds this search and keeps the days", async () => {
+    const t = setup();
+    twoNotBefore10(t);
+    const c = t.conversation();
+    const reply = await c.say("book a plumber in HSR Layout this week");
+    expect(reply.message.text).toMatch(/not before 10:00/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([
+      expect.objectContaining({
+        key: "earliest_time",
+        value: "10:00",
+        source: "inferred",
+        status: "awaiting_confirmation",
+      }),
+    ]);
+    expect((t.facts(c.id).time_window!.value as { earliest: string | null }).earliest).toBeNull(); // I-7
+
+    await c.say("yes");
+    expect(memory.state(t.testDb.db, ALICE, "earliest_time")).toMatchObject({ value: "10:00" });
+    expect(t.facts(c.id).time_window).toMatchObject({
+      source: "memory",
+      value: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: "10:00" },
+    });
+    expect(t.phases(c.id).at(-1)).toBe("choosing");
+    t.testDb.close();
+  });
+
+  it("a request that gives its own earliest time is not asked about the inferred one", async () => {
+    const t = setup();
+    twoNotBefore10(t);
+    const reply = await t.conversation().say("book a plumber in HSR Layout this week, not before 9am");
+    expect(reply.message.text).not.toMatch(/not before 10:00/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([]);
+    t.testDb.close();
+  });
+});
+
 describe("stated memory (MH-6)", () => {
   it("a one-off request detail is never saved as stated", async () => {
     const t = setup();
@@ -250,8 +387,9 @@ describe("stated memory (MH-6)", () => {
     const reply = await c.say("plumber in HSR this week");
     expect(reply.message.text).toMatch(/saved time: not before 10:00/i);
     const offered = (
-      reply.message.parts.find((p) => (p as { type: string }).type === "option_blocks") as
-        { blocks: { slots: { start: string }[] }[] }
+      reply.message.parts.find((p) => (p as { type: string }).type === "option_blocks") as {
+        blocks: { slots: { start: string }[] }[];
+      }
     ).blocks.flatMap((b) => b.slots.map((s) => s.start.slice(11, 16)));
     expect(offered.length).toBeGreaterThan(0);
     expect(offered.every((time) => time >= "10:00")).toBe(true);
@@ -287,7 +425,10 @@ describe("stated memory (MH-6)", () => {
     });
     expect(memory.state(t.testDb.db, ALICE, "earliest_time")).toBeUndefined();
     await c.say("Koramangala");
-    expect(t.facts(c.id)).toMatchObject({ service: { value: "electrician" }, area: { value: "koramangala" } });
+    expect(t.facts(c.id)).toMatchObject({
+      service: { value: "electrician" },
+      area: { value: "koramangala" },
+    });
     t.testDb.close();
   });
 

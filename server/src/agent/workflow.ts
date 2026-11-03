@@ -171,6 +171,23 @@ const timeFactHasBounds = (fact: (Fact & { value: TimeWindow | null }) | undefin
 
 type DetailsTool = { getProvider: (providerId: string) => ToolResult<ProviderDetails> };
 type Held = { holdId: string; expiresAt: number; quotedPrice: number };
+/** One inferred memory value offered for confirmation (2.5.8) — saved as the workflow's pending question. */
+type Proposal = {
+  ask: string;
+  factId: string;
+  key: string;
+  value: string;
+  service: string | null;
+  label: string;
+};
+
+/** The memory key a pending yes/no is about, if the waiting question is a memory confirmation. */
+const pendingMemoryKey = (w: WorkflowRow): string | undefined => {
+  const pending = w.pending_question
+    ? (JSON.parse(w.pending_question) as { type?: string; key?: string })
+    : undefined;
+  return pending?.type === "memory_confirm" ? pending.key : undefined;
+};
 
 /** The provider's display name from the saved option blocks. */
 const nameOf = (w: WorkflowRow, providerId: string): string =>
@@ -603,15 +620,15 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         facts: saved.workflow.facts,
         code: TIME_OUT_OF_RANGE,
       };
-    // U33: propose a remembered preferred provider from the user's own booking history
-    // (only for book, only when memory doesn't already answer it); one yes/no ask rides
-    // on the reply as R9 priority 3.
+    // 2.5.8 inferred memory: propose one remembered value from the user's own history
+    // (only for book, only when memory and the request don't already answer it); one
+    // yes/no ask rides on the reply as R9 priority 3.
     const proposal =
-      intent === "book" && values.service
-        ? proposePreferredProvider(
+      intent === "book"
+        ? proposeFromHistory(
             saved.workflow,
             userId,
-            values.service,
+            values.service ?? null,
             (read as { sameAsLast?: boolean }).sameAsLast === true,
           )
         : undefined;
@@ -622,10 +639,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         pending_question: JSON.stringify({
           type: "memory_confirm",
           factId: proposal.factId,
-          key: "preferred_provider",
-          value: proposal.providerId,
-          service: values.service ?? null,
-          label: proposal.providerName,
+          key: proposal.key,
+          value: proposal.value,
+          service: proposal.service,
+          label: proposal.label,
         }),
       }));
       withPendingRow = withPending.workflow;
@@ -821,10 +838,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const phase = phaseAfterChange(current, factChanged || timeChanged, facts);
     const changed = factChanged || timeChanged; // rule 2: what was built on the facts clears
     if (changed) voidOpenApproval(current, "user_correction");
+    // the user answered the detail a memory question was about: the question is gone, and the
+    // inferred fact stays unconfirmed (never used, I-7)
+    const proposing = pendingMemoryKey(current);
+    const answered =
+      (proposing === "area" && !!values.area) ||
+      (proposing === "earliest_time" && timeChanged && !!facts.time_window?.value?.earliest);
     const saved = saveWorkflow(conversationId, current.version, (w) => ({
       ...w,
       facts,
       phase,
+      ...(answered ? { pending_question: null } : {}),
       ...(changed ? { candidates: null, selection: null, hold: null } : {}),
       intent: w.intent ?? (values.intent as WorkflowRow["intent"]), // a correction never switches the task (U30 asks first)
     }));
@@ -1444,17 +1468,134 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
    * ask stored as the pending question (R9 priority 3). Skipped when memory already
    * answers the key or the user's own bookings never repeat a provider.
    */
+  /**
+   * 2.5.8: at most one inferred value is proposed per request, in this order — preferred
+   * provider, area, earliest time — and only for a detail the request and active memory
+   * leave open. `list_bookings` is called at most once for all of them.
+   */
+  function proposeFromHistory(
+    w: WorkflowRow,
+    userId: string,
+    service: string | null,
+    sameAsLast: boolean,
+  ): Proposal | undefined {
+    let listed: BookingRecord[] | null | undefined;
+    const bookings = (): BookingRecord[] | null => {
+      if (listed === undefined) {
+        const result = list?.();
+        listed = result?.ok ? result.data.bookings : null;
+      }
+      return listed;
+    };
+    const recordTrace = (event: "inferred" | "blocked-by-forget", r: { key: string; value: string }) =>
+      trace?.record("memory_event", { event, key: r.key, value: r.value });
+    if (service) {
+      const provider = proposePreferredProvider(w, userId, service, sameAsLast, bookings, recordTrace);
+      if (provider) return provider;
+    }
+    if (!w.facts.area && !memoryApi.state(db, userId, "area")) {
+      const area = proposeArea(userId, bookings, recordTrace);
+      if (area) return area;
+    }
+    const window = w.facts.time_window?.value ?? null;
+    if (!window?.earliest && !memoryApi.state(db, userId, "earliest_time"))
+      return proposeEarliestTime(userId, window, recordTrace);
+    return undefined;
+  }
+
+  /** The same area in 2 completed bookings (any service), most recent first. */
+  function proposeArea(
+    userId: string,
+    bookings: () => BookingRecord[] | null,
+    recordTrace: (event: "inferred" | "blocked-by-forget", r: { key: string; value: string }) => void,
+  ): Proposal | undefined {
+    const days = new Map<string, string[]>();
+    for (const b of bookings() ?? []) {
+      if (b.status !== "completed") continue;
+      const seen = [...(days.get(b.area) ?? []), b.slot.slice(0, 10)];
+      days.set(b.area, seen);
+      if (seen.length < 2) continue;
+      const name = AREA_NAMES[b.area] ?? b.area;
+      const result = memoryApi.inferCandidate(
+        db,
+        clock,
+        userId,
+        "area",
+        b.area,
+        null,
+        `bookings in ${name} on ${seen.join(" and ")}`,
+        recordTrace,
+      );
+      if (!result.created || !result.fact) return undefined;
+      return {
+        ask: `Your last two bookings were in ${name} — use ${name} again?`,
+        factId: result.fact.id,
+        key: "area",
+        value: b.area,
+        service: null,
+        label: name,
+      };
+    }
+    return undefined;
+  }
+
+  /** The same "not before X" the user gave in 2 finished bookings (our own workflows). */
+  function proposeEarliestTime(
+    userId: string,
+    window: TimeWindow | null,
+    recordTrace: (event: "inferred" | "blocked-by-forget", r: { key: string; value: string }) => void,
+  ): Proposal | undefined {
+    const rows = db
+      .prepare(
+        `SELECT facts, selection FROM workflow WHERE user_id = ? AND intent = 'book' AND phase = 'done' ORDER BY updated_at DESC, rowid DESC`,
+      )
+      .all(userId) as { facts: string; selection: string | null }[];
+    const days = new Map<string, string[]>();
+    for (const row of rows) {
+      const tw = (JSON.parse(row.facts) as Facts).time_window;
+      const earliest = tw?.source === "user" ? tw.value?.earliest : null;
+      if (!earliest) continue;
+      const slot = row.selection ? (JSON.parse(row.selection) as Selection).slot : "";
+      const seen = [...(days.get(earliest) ?? []), slot.slice(0, 10)].filter(Boolean);
+      days.set(earliest, seen);
+      if (seen.length < 2) continue;
+      if (window?.latest && window.latest <= earliest) return undefined; // would leave no time at all
+      const result = memoryApi.inferCandidate(
+        db,
+        clock,
+        userId,
+        "earliest_time",
+        earliest,
+        null,
+        `bookings not before ${earliest} on ${seen.join(" and ")}`,
+        recordTrace,
+      );
+      if (!result.created || !result.fact) return undefined;
+      return {
+        ask: `Your last two bookings were not before ${earliest} — keep that as your earliest time?`,
+        factId: result.fact.id,
+        key: "earliest_time",
+        value: earliest,
+        service: null,
+        label: earliest,
+      };
+    }
+    return undefined;
+  }
+
   function proposePreferredProvider(
     w: WorkflowRow,
     userId: string,
     service: string,
     sameAsLast: boolean,
-  ): { ask: string; providerName: string; providerId: string; factId: string } | undefined {
-    if (w.intent !== "book" || !service || !list) return undefined;
+    bookings: () => BookingRecord[] | null,
+    recordTrace: (event: "inferred" | "blocked-by-forget", r: { key: string; value: string }) => void,
+  ): Proposal | undefined {
+    if (w.intent !== "book" || !service) return undefined;
     if (memoryApi.state(db, userId, "preferred_provider", service)) return undefined;
-    const listed = list();
-    if (!listed.ok) return undefined;
-    const completed = listed.data.bookings.filter((b) => b.service === service && b.status === "completed");
+    const listedBookings = bookings();
+    if (!listedBookings) return undefined;
+    const completed = listedBookings.filter((b) => b.service === service && b.status === "completed");
     const byProvider = new Map<string, { name: string; days: string[] }>();
     for (const b of completed) {
       const e = byProvider.get(b.providerId) ?? { name: b.providerName, days: [] };
@@ -1475,13 +1616,20 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       sameAsLast
         ? `the same ${label} as last time — booked ${pick.name} on ${pick.days.join(" and ")}`
         : `${label} bookings with ${pick.name} on ${pick.days.join(" and ")}`,
-      (event, r) => trace?.record("memory_event", { event, key: r.key, value: r.value }),
+      recordTrace,
     );
     if (!result.created || !result.fact) return undefined;
     const ask = sameAsLast
       ? `Your last ${label} booking was with ${pick.name} — keep them coming?`
       : `Your last two ${label} bookings were with ${pick.name} — keep them coming?`;
-    return { ask, providerName: pick.name, providerId, factId: result.fact.id };
+    return {
+      ask,
+      factId: result.fact.id,
+      key: "preferred_provider",
+      value: providerId,
+      service,
+      label: pick.name,
+    };
   }
 
   /**
@@ -1518,9 +1666,27 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (pending.key === "preferred_provider")
       return applyPreferredProviderNow(base, pending.value, pending.label);
     const facts = { ...base.facts } as Facts;
-    facts.area = memoryFactOf(pending.key, { id: pending.factId, value: pending.value }) as Fact & {
-      value: string;
-    };
+    if (pending.key === "area") {
+      facts.area = memoryFactOf(pending.key, { id: pending.factId, value: pending.value }) as Fact & {
+        value: string;
+      };
+    } else {
+      // the confirmed earliest time bounds the request's window and keeps its days
+      const known = facts.time_window?.value ?? null;
+      const window: TimeWindow = {
+        dateFrom: known?.dateFrom ?? null,
+        dateTo: known?.dateTo ?? null,
+        earliest: pending.value,
+        latest: known?.latest ?? null,
+      };
+      facts.time_window = memoryFactOf(
+        pending.key,
+        { id: pending.factId, value: pending.value },
+        window,
+      ) as Fact & {
+        value: TimeWindow;
+      };
+    }
     const saved = saveWorkflow(conversationId, base.version, (w) => ({
       ...w,
       facts,
@@ -1532,7 +1698,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return {
       ...outcome,
       reply:
-        `Using your saved ${pending.key === "area" ? "area" : "time"}: ${AREA_NAMES[pending.value] ?? pending.value}. ${outcome.reply}`.trim(),
+        `${pending.key === "area" ? `Using your saved area: ${AREA_NAMES[pending.value] ?? pending.value}.` : `Using your saved time: not before ${pending.value}.`} ${outcome.reply}`.trim(),
     };
   }
 
@@ -2172,7 +2338,13 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       };
     }
 
-    const missing = missingFacts(w.facts);
+    // a detail a waiting memory question would answer isn't asked a second time in the same reply
+    const proposing = pendingMemoryKey(w);
+    const missing = missingFacts(w.facts).filter(
+      (key) =>
+        !(proposing === "area" && key === "area") &&
+        !(proposing === "earliest_time" && key === "time_window"),
+    );
     if (w.phase === "collecting" && missing.length > 0) {
       const asks = missing.map((key) =>
         key === "area" ? "which area" : key === "time_window" ? "when" : `which ${key}`,
