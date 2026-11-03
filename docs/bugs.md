@@ -169,6 +169,12 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/conversations/conversations.routes.ts` maps each message to `{ id, role, text, parts, runId }`. Also: switching conversations clears a trace picked in the old one (`Chat.tsx` `open`).
 - **Regression tests (red → green).** `conversations.test.ts` "the trace of that run…" reloads the conversation and expects the agent message's `runId` (red: undefined); `client/src/screens/Chat.test.tsx` "switching conversations shows the new conversation's latest run…" (red). Found while recording the demo.
 
+### B22 — "What do you remember?" asked to confirm a provider already kept, and never named it
+
+- **What broke.** After "yes" kept an inferred provider, the chat list still said "preferred electrician (I worked out — say yes to keep it)" — every inferred fact got that label whatever its status — and the provider was never named.
+- **Fix.** `server/src/agent/workflow.ts` `memoryView`: the label follows the status ("I worked out, you kept it" when active) and the provider is named via `get_provider`.
+- **Regression test (red → green).** `agent/memory.flow.test.ts` "'what do you remember' names the provider and says a kept inferred fact is kept…". Found while planning the demo's memory scene.
+
 ## Invariants found broken by tests
 
 _None yet._

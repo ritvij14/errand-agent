@@ -1377,6 +1377,12 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     } as Fact;
   }
 
+  /** A saved provider is stored by id; the user hears its name (one `get_provider` through the gateway). */
+  function providerNameOf(providerId: string): string {
+    const details = getProvider?.(providerId);
+    return details?.ok ? details.data.name : providerId;
+  }
+
   function memoryView(current: WorkflowRow | undefined, userId: string): ApplyOutcome {
     const factsList = memoryApi.view(db, userId);
     const lines = factsList.map((f) => {
@@ -1385,8 +1391,14 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
           ? `area — ${AREA_NAMES[f.value] ?? f.value}`
           : f.key === "earliest_time"
             ? `time — not before ${f.value}`
-            : `preferred ${f.service ?? "provider"}`;
-      return `${what} (${f.source === "stated" ? "you told me" : "I worked out — say yes to keep it"})`;
+            : `preferred ${f.service ?? "provider"} — ${providerNameOf(f.value)}`;
+      const how =
+        f.source === "stated"
+          ? "you told me"
+          : f.status === "active"
+            ? "I worked out, you kept it"
+            : "I worked out — say yes to keep it";
+      return `${what} (${how})`;
     });
     return {
       phase: current?.phase ?? "collecting",

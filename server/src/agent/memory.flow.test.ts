@@ -130,6 +130,25 @@ describe("inferred preferred provider (U33, V-12, R9)", () => {
     expect(reply.message.text).toMatch(/Your last electrical work booking was with .+ — keep them coming\?/);
     t.testDb.close();
   });
+
+  it("'what do you remember' names the provider and says a kept inferred fact is kept — not 'say yes' again", async () => {
+    const t = setup();
+    addCompletedBooking(t);
+    const c = t.conversation();
+    await c.say("the same electrician as last time in koramangala, any time");
+    const fact = memory.view(t.testDb.db, ALICE)[0]!;
+    const name = (
+      t.testDb.db.prepare(`SELECT name FROM mock_provider WHERE id = ?`).get(fact.value) as { name: string }
+    ).name;
+    const waiting = await c.say("what do you remember about me?");
+    expect(waiting.message.text).toContain(
+      `preferred electrician — ${name} (I worked out — say yes to keep it)`,
+    );
+    await c.say("yes", fact.id);
+    const kept = await c.say("what do you remember about me?");
+    expect(kept.message.text).toContain(`preferred electrician — ${name} (I worked out, you kept it)`);
+    t.testDb.close();
+  });
 });
 
 describe("inferred area and earliest time (2.5.8: same value twice)", () => {
