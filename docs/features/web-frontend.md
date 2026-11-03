@@ -27,4 +27,4 @@
 
 ## QA
 
-RTL component tests (`client/src/screens/*.test.tsx`); the API path is proven through the Vite proxy (`:5173/api`) like the page does. The manual browser click-through comes once at U40 (ADR-006).
+RTL component tests (`client/src/screens/*.test.tsx`); the API path is proven through the Vite proxy (`:5173/api`) like the page does. The manual browser click-through is `docs/qa-checklist.md`, run once by the operator (ADR-006, U40).
