@@ -12,7 +12,7 @@
 **Type:** Full-Stack Web App (API server + single web chat page, one repo)
 **Primary Users:** Local users who sign in with a username and password and chat through the web frontend; the grader, who runs tests and evals from the CLI.
 **Stage:** MVP
-**Repo:** TBD (local git only; no remote yet)
+**Repo:** https://github.com/ritvij14/errand-agent (remote `origin`, branch `main`)
 
 **Governing brief:** [`docs/problem-statement.md`](docs/problem-statement.md) — the graded assignment. The tool contract (§ Tool environment), the 8 must-haves, the 2 nice-to-haves and the 6 deliverables are fixed there and are never re-interpreted in code. When any section of this file conflicts with the brief, the brief wins.
 
@@ -198,8 +198,8 @@ Before writing a `useEffect`, check which category it falls into:
 ### Git
 
 - Commit format: conventional commits — `feat:`, `fix:`, `chore:`, `docs:`.
-- Work directly on `main` (solo project, local git only; no remote yet).
-- Never commit `.env` — check `git status` before every push (once a remote exists).
+- Work directly on `main` (solo project); push to `origin/main`.
+- Never commit `.env` — check `git status` before every push.
 
 ### Other
 
