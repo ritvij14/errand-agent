@@ -177,6 +177,26 @@ describe("Chat — refresh after a reply", () => {
 });
 
 describe("Chat — trace panel (FR-13, U35)", () => {
+  it("switching conversations shows the new conversation's latest run, not a trace picked in the old one", async () => {
+    mocked.conversations.mockResolvedValue([
+      { id: "c1", title: "Plumber this week", createdAt: 0, updatedAt: 0, busy: false },
+      { id: "c2", title: "Electrician", createdAt: 0, updatedAt: 0, busy: false },
+    ]);
+    mocked.conversation.mockImplementation(async (id: string) =>
+      id === "c1"
+        ? { conversation: { id: "c1" }, messages: MESSAGES, busy: false }
+        : {
+            conversation: { id: "c2" },
+            messages: [{ id: "m9", role: "agent", text: "hi", parts: [], runId: "r2" }],
+            busy: false,
+          },
+    );
+    const user = await openConversation();
+    await user.click(screen.getAllByRole("button", { name: "trace" }).at(-1)!);
+    await user.click(button("Electrician"));
+    await waitFor(() => expect(mocked.trace).toHaveBeenLastCalledWith("r2"));
+  });
+
   it("each agent reply has a trace link that switches the panel to that run", async () => {
     const user = await openConversation();
     await user.click(screen.getAllByRole("button", { name: "trace" }).at(-1)!);

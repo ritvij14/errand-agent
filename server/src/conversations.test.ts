@@ -152,6 +152,11 @@ describe("send message", () => {
     expect(all[1]!.data).toMatchObject({ job: "read", input: "hi" });
     expect(all[2]!.data).toMatchObject({ job: "write", input: { phase: expect.any(String) } });
     expect(all[2]!.data.output).toEqual(expect.any(String));
+    // the page finds the trace from the reloaded conversation: each agent message names its run as `runId` (api-contracts)
+    const reloaded = (await call("alice", `/api/conversations/${created.id}`, "GET")).body.data as {
+      messages: Record<string, unknown>[];
+    };
+    expect(reloaded.messages.find((m) => m.role === "agent")?.runId).toBe(sent.runId);
     // bob cannot read alice's run trace
     const stolen = await call("bob", `/api/runs/${sent.runId}/trace`, "GET");
     expect(stolen.status).toBe(404);

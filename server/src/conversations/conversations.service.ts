@@ -15,7 +15,7 @@ import {
   type ForcedQueue,
   type MockSettings,
 } from "../tools/index.js";
-import { conversationRepo, type Conversation, type Run } from "./conversations.repo.js";
+import { conversationRepo, type Conversation, type Message, type Run } from "./conversations.repo.js";
 
 // The conversation feature (MH-5): one active run per conversation, everything
 // else refused with CONVERSATION_BUSY; every run ends with a recorded outcome.
@@ -273,7 +273,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
     readConversation: (
       userId: string,
       id: string,
-    ): { conversation: Conversation; messages: unknown[]; busy: boolean } | ConversationFailure => {
+    ): { conversation: Conversation; messages: Message[]; busy: boolean } | ConversationFailure => {
       const conversation = repo.getConversation(id, userId);
       if (!conversation) return { code: "NOT_FOUND", message: "Conversation doesn't exist" };
       return { conversation, messages: repo.listMessages(id), busy: busyMarkers.has(id) };

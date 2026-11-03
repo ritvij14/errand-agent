@@ -88,7 +88,14 @@ export const createConversationsRouter = (deps: ConversationsRouterDeps): Router
       res.status(200).json({
         data: {
           conversation: result.conversation,
-          messages: result.messages,
+          // the contract's Message shape (api-contracts.md), not the stored row
+          messages: result.messages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            text: m.text,
+            parts: m.parts,
+            runId: m.run_id,
+          })),
           busy: result.busy,
         },
       });

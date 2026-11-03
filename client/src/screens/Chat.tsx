@@ -60,7 +60,12 @@ export function Chat() {
   const shownCardId = isApprovalCard(newestCard) ? newestCard.approvalId : undefined;
   const shownFactId = isMemoryConfirm(newestCard) ? newestCard.factId : undefined;
   const trace = useTrace(shownRunId, shownRunId !== null);
-  const startConversation = () => create.mutate(undefined, { onSuccess: (c) => setSelected(c.id) });
+  // a trace picked in one conversation never follows the user into another
+  const open = (id: string) => {
+    setSelected(id);
+    setTraceRunId(null);
+  };
+  const startConversation = () => create.mutate(undefined, { onSuccess: (c) => open(c.id) });
   const send = () => {
     const text = draft.trim();
     if (!text || !selected || busy) return;
@@ -89,7 +94,7 @@ export function Chat() {
             <button
               key={c.id}
               className={`mb-1 block w-full truncate rounded px-2 py-1 text-left text-sm ${selected === c.id ? "bg-neutral-200" : ""}`}
-              onClick={() => setSelected(c.id)}
+              onClick={() => open(c.id)}
             >
               {c.busy ? "⋯ " : ""}
               {c.title}
@@ -192,7 +197,7 @@ export function Chat() {
         )}
         <aside
           aria-label="Trace panel"
-          className="w-64 shrink-0 overflow-y-auto rounded-lg border border-neutral-200 p-3"
+          className="w-[32rem] shrink-0 overflow-y-auto rounded-lg border border-neutral-200 p-3"
         >
           <TracePanel trace={trace.data ?? null} />
         </aside>

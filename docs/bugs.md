@@ -163,6 +163,12 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/evals/runner.ts`: each `expect` step records what it saw (`phase=…`, `tools=[…]`, `agent bookings=…` …) into "actual"; `MUST_COVER` names only the scenarios that test each category. `scenarios.ts` eval 4 visits one provider per injection kind.
 - **Regression tests (red → green).** `evals/runner.test.ts` "the actual column shows what each expectation observed…" and the coverage test's new cases — removing 9, 12, or 6 + 7 fails that category by name (both red). Eval 4 itself proves the five kinds. Found in an MH-8 review.
 
+### B21 — The chat page never showed a trace
+
+- **What broke.** The trace panel stayed on "No trace yet" and replies had no "trace" link, after any conversation reload. The page finds runs by each agent message's `runId`, but `GET /api/conversations/:id` sent the stored rows as they are — `run_id`, plus internal columns — not the contract's `Message` shape (`docs/infra/api-contracts.md`). Client tests mocked the contract shape, so they could not see it.
+- **Fix.** `server/src/conversations/conversations.routes.ts` maps each message to `{ id, role, text, parts, runId }`. Also: switching conversations clears a trace picked in the old one (`Chat.tsx` `open`).
+- **Regression tests (red → green).** `conversations.test.ts` "the trace of that run…" reloads the conversation and expects the agent message's `runId` (red: undefined); `client/src/screens/Chat.test.tsx` "switching conversations shows the new conversation's latest run…" (red). Found while recording the demo.
+
 ## Invariants found broken by tests
 
 _None yet._
