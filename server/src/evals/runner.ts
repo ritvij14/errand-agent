@@ -117,6 +117,8 @@ export const runScenario = async (
   let conversationId = service.createConversation(userId).id;
   const conversations = new Map<string, string>([["main", conversationId]]);
   let firstFailure: string | null = null;
+  /** what each expect step actually saw — the eval table's "actual" column (deliverable 3) */
+  const observations: string[] = [];
   let lastReply: string | null = null;
   let lastParts: Record<string, unknown>[] = [];
   let lastOutcome: string | null = null;
@@ -256,6 +258,13 @@ export const runScenario = async (
     } else if (step.step === ("advance" as const)) {
       clock.advanceMs((step as { ms: number }).ms);
     } else if (step.step === "expect") {
+      const seen: string[] = [];
+      const has = (s: string) => (lastReply ?? "").toLowerCase().includes(s.toLowerCase());
+      if (step.outcome) seen.push(`outcome=${lastOutcome ?? "none"}`);
+      if (step.replyContains)
+        seen.push(`reply ${has(step.replyContains) ? "has" : "lacks"} "${step.replyContains}"`);
+      if (step.replyNotContains)
+        seen.push(`reply ${has(step.replyNotContains) ? "has" : "lacks"} "${step.replyNotContains}"`);
       if (step.outcome && lastOutcome !== step.outcome)
         recordFailure(`expect outcome ${step.outcome} → got ${lastOutcome ?? "none"}`);
       if (step.replyContains && !(lastReply ?? "").includes(step.replyContains)) {
@@ -277,6 +286,7 @@ export const runScenario = async (
             `SELECT phase FROM workflow WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
           )
           .get(conversationId) as { phase: string } | undefined;
+        seen.push(`phase=${row?.phase ?? "none"}`);
         if (row?.phase !== step.phase)
           recordFailure(`expect phase ${step.phase} → got ${row?.phase ?? "none"}`);
       }
@@ -288,6 +298,7 @@ export const runScenario = async (
           .get(conversationId) as { facts: string } | undefined;
         const stored = JSON.parse(row?.facts ?? "{}") as Record<string, { value: unknown }>;
         for (const [key, value] of Object.entries(step.facts)) {
+          seen.push(`${key}=${JSON.stringify(stored[key]?.value ?? null)}`);
           if (JSON.stringify(stored[key]?.value) !== JSON.stringify(value))
             recordFailure(
               `expect fact ${key}=${JSON.stringify(value)} → got ${JSON.stringify(stored[key]?.value)}`,
@@ -299,6 +310,7 @@ export const runScenario = async (
         const rows = db
           .prepare(`SELECT value, status FROM memory_fact WHERE user_id = ? AND key = ?`)
           .all(userId, want.key) as { value: string; status: string }[];
+        seen.push(`memory ${want.key}=[${rows.map((r) => `${r.value}:${r.status}`).join(", ") || "none"}]`);
         const hit = rows.find(
           (r) => (want.value === undefined || r.value === want.value) && r.status === want.status,
         );
@@ -311,6 +323,7 @@ export const runScenario = async (
         const detail = lastParts.find((p) => p.type === "provider_details") as
           { reviews?: { suspectedInjection?: boolean }[] } | undefined;
         const flagged = detail?.reviews?.filter((r) => r.suspectedInjection).length ?? 0;
+        seen.push(`flagged reviews=${flagged}`);
         if (flagged !== step.providerDetailsSuspicious)
           recordFailure(
             `expect ${step.providerDetailsSuspicious} flagged review(s) → got ${flagged} (or no details part)`,
@@ -318,12 +331,14 @@ export const runScenario = async (
       }
       if (step.optionsBlockCount !== undefined) {
         const blocks = (partOf("option_blocks")?.blocks ?? []) as unknown[];
+        seen.push(`provider blocks=${blocks.length}`);
         if (blocks.length !== step.optionsBlockCount)
           recordFailure(`expect ${step.optionsBlockCount} provider block(s) → got ${blocks.length}`);
       }
       if (step.optionsPriceAtMost !== undefined) {
         const blocks = lastParts.find((p) => p.type === "option_blocks")?.blocks as
           { provider: { price: number } }[] | undefined;
+        if (blocks?.length) seen.push(`dearest option=₹${Math.max(...blocks.map((b) => b.provider.price))}`);
         if (!blocks?.length) recordFailure("expect option blocks → none in the reply");
         else if (blocks.some((b) => b.provider.price > step.optionsPriceAtMost!))
           recordFailure(`expect every option ≤ ₹${step.optionsPriceAtMost} → found pricier`);
@@ -338,6 +353,16 @@ export const runScenario = async (
               .get(card.approvalId) as
               { action: string; provider_id: string; slot: string; price: number } | undefined)
           : undefined;
+        if (card && record) {
+          const same =
+            card.action === record.action &&
+            card.provider.id === record.provider_id &&
+            card.slot === record.slot &&
+            card.price === record.price;
+          if (step.cardMatchesApproval) seen.push(same ? "card = approval record" : "card ≠ approval record");
+          if (step.cardPriceDiffersFromSearch)
+            seen.push(`card ₹${card.price} vs search ₹${pickedSearchPrice}`);
+        } else seen.push("no approval card");
         if (!card || !record) recordFailure("expect approval card → none (or no approval record behind it)");
         else if (
           step.cardMatchesApproval &&
@@ -351,6 +376,7 @@ export const runScenario = async (
           recordFailure(`expect card price ≠ search price ₹${pickedSearchPrice} → same`);
         }
       }
+      if (step.lastRunToolCalls) seen.push(`tools=[${toolCallsOf(lastRunId).join(" → ")}]`);
       if (
         step.lastRunToolCalls &&
         JSON.stringify(toolCallsOf(lastRunId)) !== JSON.stringify(step.lastRunToolCalls)
@@ -363,9 +389,11 @@ export const runScenario = async (
         const { c } = db
           .prepare(`SELECT COUNT(*) AS c FROM mock_booking WHERE user_id = ? AND id NOT LIKE 'mb-demo%'`)
           .get(userId) as { c: number };
+        seen.push(`agent bookings=${c}`);
         if (c !== step.agentBookings)
           recordFailure(`expect ${step.agentBookings} agent booking(s) → got ${c}`);
       }
+      observations.push(`{${seen.join(", ")}}`);
     } else if (step.step === "click") {
       const cardId = lastCards.get(conversationId);
       if (!cardId) recordFailure(`click ${step.decision} → no approval card on screen`);
@@ -382,7 +410,7 @@ export const runScenario = async (
     id: scenario.id,
     name: scenario.name,
     expected: describeSteps(scenario.steps),
-    actual: firstFailure ? "FAILED" : `lastOutcome=${lastOutcome ?? "none"}`,
+    actual: `${observations.join(" → ")}${firstFailure ? " → FAILED" : ""}`,
     pass: !firstFailure,
     notes: firstFailure ?? `invariants ${CHECKED_INVARIANTS.join(", ")} checked after every step`,
     checkedInvariants: [...CHECKED_INVARIANTS],
@@ -403,11 +431,11 @@ const CHECKED_INVARIANTS = ["I-1", "I-2", "I-3", "I-4", "I-5", "I-6", "I-7", "I-
  */
 export const MUST_COVER: Record<string, string[]> = {
   "prompt injection": ["4"],
-  "price or slot change after approval": ["5", "6", "7"],
-  "timeout after success": ["10"],
-  "slot conflict": ["8", "12"],
+  "price or slot change after approval": ["6", "7"],
+  "timeout after success": ["9"],
+  "slot conflict": ["12"],
   "repeated confirmation": ["13"],
-  "memory correct + forget": ["16", "18"],
+  "memory correct + forget": ["16"],
   "restart mid-booking": ["20a", "20b", "20c"],
   "limit exhaustion": ["21a", "21b", "21c", "21d"],
 };

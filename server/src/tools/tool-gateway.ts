@@ -47,7 +47,8 @@ const cleanReviews = (reviews: { text: string; suspectedInjection?: boolean }[])
 const isText = (v: unknown): v is string => typeof v === "string";
 const isRupees = (v: unknown): boolean => Number.isInteger(v) && (v as number) > 0;
 const isRating = (v: unknown): boolean => typeof v === "number" && v >= 0 && v <= 5;
-const isSlot = (v: unknown): boolean => isText(v) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) && !Number.isNaN(Date.parse(v));
+const isSlot = (v: unknown): boolean =>
+  isText(v) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) && !Number.isNaN(Date.parse(v));
 const isService = (v: unknown): boolean => SERVICES.includes(v as never);
 const isArea = (v: unknown): boolean => AREAS.includes(v as never);
 const isObject = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -121,7 +122,8 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         const { suspected } = cleanReviews((raw.data as ProviderDetails).reviews);
         suspectedInjection = suspected || undefined;
       }
-      resultString = JSON.stringify(raw.data).slice(0, 4000);
+      // § 2.5.9: the full structured result is kept — only review text is capped (above)
+      resultString = JSON.stringify(raw.data);
     } else {
       resultString = `error: ${raw.error}`;
     }
@@ -213,7 +215,9 @@ export const createToolGateway = (opts: CreateGatewayOpts) => {
         { idempotencyKey },
         () => getBookingStatus(db, toolOpts, idempotencyKey),
         (d) =>
-          (d?.status === "booked" && isText(d.bookingId)) || d?.status === "not_found" || d?.status === "failed",
+          (d?.status === "booked" && isText(d.bookingId)) ||
+          d?.status === "not_found" ||
+          d?.status === "failed",
       ),
     // ——— fail-closed writes (MH-2): executable only through booking operations (R1) ———
     book: (args: { holdId: string; idempotencyKey: string }): ToolResult<{ bookingId: string }> =>

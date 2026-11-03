@@ -19,7 +19,10 @@ const bob = DEMO_USERS[1]!;
 const cookies: Record<string, string> = {};
 
 async function call(who: string, path: string, method: "POST" | "GET" | "DELETE", body?: unknown) {
-  const headers: Record<string, string> = { "content-type": "application/json", "sec-fetch-site": "same-origin" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "sec-fetch-site": "same-origin",
+  };
   if (cookies[who]) headers.cookie = cookies[who];
   const res = await fetch(`${baseUrl}${path}`, {
     method,
@@ -72,12 +75,17 @@ describe("conversations", () => {
     const bobList = await call("bob", "/api/conversations", "GET");
     expect(bobList.body.data as unknown[]).toEqual([]);
     const aliceList = await call("alice", "/api/conversations", "GET");
-    expect((aliceList.body.data as { id: string }[]).some((c) => c.id === (mine.body.data as { id: string }).id)).toBe(true);
+    expect(
+      (aliceList.body.data as { id: string }[]).some((c) => c.id === (mine.body.data as { id: string }).id),
+    ).toBe(true);
   });
 
   it("read returns messages oldest first; another user's conversation → NOT_FOUND", async () => {
     const created = (await call("alice", "/api/conversations", "POST")).body.data as { id: string };
-    await call("alice", `/api/conversations/${created.id}/messages`, "POST", { text: "hello", clientMessageId: "cm-read-1" });
+    await call("alice", `/api/conversations/${created.id}/messages`, "POST", {
+      text: "hello",
+      clientMessageId: "cm-read-1",
+    });
     const read = await call("alice", `/api/conversations/${created.id}`, "GET");
     expect(read.status).toBe(200);
     const messages = (read.body.data as { messages: { role: string; text: string }[] }).messages;
@@ -104,7 +112,11 @@ describe("send message", () => {
       clientMessageId: "cm-help-1",
     });
     expect(res.status).toBe(200);
-    const reply = res.body.data as { runId: string; outcome: string; message: { role: string; text: string; parts: unknown[] } };
+    const reply = res.body.data as {
+      runId: string;
+      outcome: string;
+      message: { role: string; text: string; parts: unknown[] };
+    };
     expect(reply.outcome).toBe("completed");
     expect(reply.message.role).toBe("agent");
     expect(reply.message.text.length).toBeGreaterThan(0);
@@ -125,12 +137,21 @@ describe("send message", () => {
 
   it("the trace of that run shows run_started → model_call ×2 → run_ended", async () => {
     const created = (await call("alice", "/api/conversations", "POST")).body.data as { id: string };
-    const sent = (await call("alice", `/api/conversations/${created.id}/messages`, "POST", { text: "hi", clientMessageId: "cm-trace-1" }))
-      .body.data as { runId: string };
+    const sent = (
+      await call("alice", `/api/conversations/${created.id}/messages`, "POST", {
+        text: "hi",
+        clientMessageId: "cm-trace-1",
+      })
+    ).body.data as { runId: string };
     const trace = await call("alice", `/api/runs/${sent.runId}/trace`, "GET");
     expect(trace.status).toBe(200);
-    const events = (trace.body.data as { events: { type: string }[] }).events.map((e) => e.type);
+    const all = (trace.body.data as { events: { type: string; data: Record<string, unknown> }[] }).events;
+    const events = all.map((e) => e.type);
     expect(events).toEqual(["run_started", "model_call", "model_call", "run_ended"]);
+    // both model calls show what went in and what came out (§ 2.5.9): read ← the text, write ← the decision
+    expect(all[1]!.data).toMatchObject({ job: "read", input: "hi" });
+    expect(all[2]!.data).toMatchObject({ job: "write", input: { phase: expect.any(String) } });
+    expect(all[2]!.data.output).toEqual(expect.any(String));
     // bob cannot read alice's run trace
     const stolen = await call("bob", `/api/runs/${sent.runId}/trace`, "GET");
     expect(stolen.status).toBe(404);
@@ -138,7 +159,10 @@ describe("send message", () => {
 
   it("empty message → VALIDATION_ERROR; longer than 2000 chars → VALIDATION_ERROR", async () => {
     const created = (await call("alice", "/api/conversations", "POST")).body.data as { id: string };
-    const empty = await call("alice", `/api/conversations/${created.id}/messages`, "POST", { text: "  ", clientMessageId: "cm-e1" });
+    const empty = await call("alice", `/api/conversations/${created.id}/messages`, "POST", {
+      text: "  ",
+      clientMessageId: "cm-e1",
+    });
     expect(empty.status).toBe(400);
     expect(empty.body.code).toBe("VALIDATION_ERROR");
     const long = await call("alice", `/api/conversations/${created.id}/messages`, "POST", {
@@ -170,9 +194,15 @@ describe("send message", () => {
     let release!: () => void;
     armBusyTest(new Promise<void>((resolve) => (release = resolve)));
     // the first run parks inside the gated model's read call
-    const first = call("alice", `/api/conversations/${created.id}/messages`, "POST", { text: "first", clientMessageId: "cm-busy-1" });
+    const first = call("alice", `/api/conversations/${created.id}/messages`, "POST", {
+      text: "first",
+      clientMessageId: "cm-busy-1",
+    });
     await new Promise((r) => setTimeout(r, 20)); // let the first run start and park in the model call
-    const second = await call("alice", `/api/conversations/${created.id}/messages`, "POST", { text: "second", clientMessageId: "cm-busy-2" });
+    const second = await call("alice", `/api/conversations/${created.id}/messages`, "POST", {
+      text: "second",
+      clientMessageId: "cm-busy-2",
+    });
     expect(second.status).toBe(409);
     expect(second.body.code).toBe("CONVERSATION_BUSY");
     release();

@@ -57,6 +57,16 @@ describe("the eval runner", () => {
     w.testDb.close();
   });
 
+  it("the actual column shows what each expectation observed, not just the last outcome (deliverable 3)", async () => {
+    const w = evalWorld();
+    const result = await runScenario(w.testDb.db, SCENARIOS["9"]!, w.user);
+    expect(result.pass).toBe(true);
+    expect(result.actual).toContain("phase=done");
+    expect(result.actual).toContain("agent bookings=1");
+    expect(result.actual).toContain("tools=[book:timeout → get_booking_status:booked]");
+    w.testDb.close();
+  });
+
   it("fails a deliberately broken scenario and names the first failing check", async () => {
     const w = evalWorld();
     const broken = {
@@ -134,6 +144,14 @@ describe("booking invariants catch what they claim to (§ 2.5.10)", () => {
     expect(coverageReport(Object.keys(SCENARIOS).filter((id) => !id.startsWith("21")))).toContain(
       "limit exhaustion",
     );
+    // each category is met only by the scenario that tests it: timeout-after-success is 9, not 10
+    expect(coverageReport(Object.keys(SCENARIOS).filter((id) => id !== "9"))).toEqual([
+      "timeout after success",
+    ]);
+    expect(coverageReport(Object.keys(SCENARIOS).filter((id) => id !== "12"))).toEqual(["slot conflict"]);
+    expect(coverageReport(Object.keys(SCENARIOS).filter((id) => id !== "6" && id !== "7"))).toEqual([
+      "price or slot change after approval",
+    ]);
     // and fewer than 15 scenarios never passes
     expect(coverageReport(Object.keys(SCENARIOS).slice(0, 14)).join(" ")).toContain("at least 15 scenarios");
   });

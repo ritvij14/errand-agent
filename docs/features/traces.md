@@ -5,6 +5,7 @@
 ## What exists
 
 - `trace_event` table (`migrations/003_trace_events.sql`) — one ordered event list per run; every trace write goes through `TRACE_EVENT_FIELDS` allow-lists in `tracing.ts`, so by construction no password, session token or cookie can be stored (I-9).
+- **What a tool call and a model call keep (B19).** `tool_call.result` is the **full** structured result as JSON — never cut (it used to be sliced at 4,000 characters, which could leave broken JSON for a broad search); only review text is capped at 500. The write `model_call` records its `input` — `{ phase, code }`, the decision being worded — alongside the reply text; the read records the user's message.
 - `server/src/tracing/trace.routes.ts` — `GET /api/runs/:id/trace`: the run row + its ordered events; only the run's own conversation's user (V-7: 404 otherwise), 401 unauthenticated. Mounted in `app.ts`.
 - `server/src/tracing/export.ts` — `exportTrace` (run + events, exactly as stored) and `writeTraceFile`.
 - `npm run trace:export -- <run id>` (`trace-export.cli.ts`) — deliverable 5: writes `traces/<run id>.json` from the app database (server/data/errand.db). `traces/` is git-ignored except the committed deliverable file.

@@ -182,7 +182,12 @@ export const createConversationService = (deps: ConversationsDeps) => {
         const writeElapsed = createElapsed();
         const text =
           outcome.reply || (await countedModel.write({ purpose: outcome.code ?? "help", state: {} }));
-        trace.record("model_call", { job: "write", output: text }, Math.round(writeElapsed.ms()));
+        trace.record(
+          "model_call",
+          // the decision being worded (§ 2.5.9): where the workflow stands and any known code
+          { job: "write", input: { phase: outcome.phase, code: outcome.code ?? null }, output: text },
+          Math.round(writeElapsed.ms()),
+        );
         ending = { outcome: runOutcomeOf(outcome.code), text, parts: (outcome.parts ?? []) as ReplyPart[] };
       } catch (error) {
         if (error instanceof SimulatedCrash) throw error; // the process is gone: nothing more runs

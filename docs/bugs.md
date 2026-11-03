@@ -151,6 +151,18 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/agent/workflow.ts` `answerMemoryCard`: decides only when the card's `memoryFactId` is the waiting question and the fact is still `awaiting_confirmation`; otherwise it changes nothing and says so (`MEMORY_CONFIRM_STALE`). The reply carries a `memory_confirm` card (`client/src/components/MemoryConfirmCard.tsx`: Keep / Don't keep), and every yes / no carries its `memoryFactId`.
 - **Regression tests (red → green).** `agent/memory.flow.test.ts` "Keep on a card already answered in the memory panel changes nothing and says so — never a booking report" (red: the rejected area was applied), "a 'yes' carrying a different fact's id never confirms the waiting one", "the proposal comes with a memory card naming the waiting fact…"; `client/src/screens/Chat.test.tsx` "Chat — memory card" (4 tests).
 
+### B19 — Traces cut tool results at 4,000 characters, and the reply-writing call had no input
+
+- **What broke.** The gateway stored `JSON.stringify(result).slice(0, 4000)`: a broad search (more providers or days) would leave a truncated, unparseable result in the trace, though § 2.5.9 promises the full structured result. The write `model_call` recorded only its output, not the decision it worded.
+- **Fix.** `server/src/tools/tool-gateway.ts` keeps the whole result (review text stays capped at 500); `server/src/conversations/conversations.service.ts` records the write call's `input: { phase, code }`.
+- **Regression tests (red → green).** `tools/tool-gateway.test.ts` "a long result is kept whole and readable — never cut mid-way" (red: 4000 chars); `conversations.test.ts` "the trace of that run shows run_started → model_call ×2 → run_ended" now also checks both calls' input (red: no write input). Found in an MH-7 review.
+
+### B20 — The eval table and its coverage gate claimed more than they showed
+
+- **What broke.** (1) Every row's "actual" was `lastOutcome=completed` — the table never showed what the checks observed. (2) `MUST_COVER` mapped "timeout after success" to scenario 10 (the timeout that booked nothing), "slot conflict" also to 8 (hold expired), "price/slot change after approval" also to 5 (a change *before* approval) — so the gate could pass on the wrong scenario. (3) Eval 4 exercised one injection kind while the design lists five.
+- **Fix.** `server/src/evals/runner.ts`: each `expect` step records what it saw (`phase=…`, `tools=[…]`, `agent bookings=…` …) into "actual"; `MUST_COVER` names only the scenarios that test each category. `scenarios.ts` eval 4 visits one provider per injection kind.
+- **Regression tests (red → green).** `evals/runner.test.ts` "the actual column shows what each expectation observed…" and the coverage test's new cases — removing 9, 12, or 6 + 7 fails that category by name (both red). Eval 4 itself proves the five kinds. Found in an MH-8 review.
+
 ## Invariants found broken by tests
 
 _None yet._
