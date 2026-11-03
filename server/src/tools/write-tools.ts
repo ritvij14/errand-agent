@@ -39,7 +39,7 @@ export const holdSlot = (
   if (forced === "slot_unavailable" || Number.isNaN(slotMs) || slotMs <= opts.clock.now().getTime()) {
     return { ok: false, error: "slot_unavailable", transient: false };
   }
-  if (!isFree(db, opts, args.providerId, args.slot)) {
+  if (!isFree(db, opts, args.providerId, args.slot, userId)) {
     return { ok: false, error: "slot_unavailable", transient: false };
   }
   const provider = db.prepare(`SELECT price FROM mock_provider WHERE id = ?`).get(args.providerId) as
@@ -62,6 +62,12 @@ export const holdSlot = (
     quotedPrice = Math.max(1, Math.round(provider.price * (1 + (drift * 2 - 1) * settings.priceDiffMax)));
   }
   const holdId = randomUUID();
+  // a re-hold replaces the user's own earlier hold on this slot (one hold per slot)
+  db.prepare(`DELETE FROM mock_hold WHERE user_id = ? AND provider_id = ? AND slot = ?`).run(
+    userId,
+    args.providerId,
+    args.slot,
+  );
   db.prepare(
     `INSERT INTO mock_hold (id, user_id, provider_id, slot, quoted_price, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
@@ -244,13 +250,14 @@ const drawBookOutcome = (
     : "timeout";
 };
 
-const isFree = (db: Db, opts: WriteOpts, providerId: string, slot: string): boolean =>
+const isFree = (db: Db, opts: WriteOpts, providerId: string, slot: string, holderId: string): boolean =>
   freeSlots(
     db,
     { seed: opts.seed, clock: opts.clock },
     providerId,
     slot.slice(0, 10),
     slot.slice(0, 10),
+    holderId,
   ).includes(slot);
 
 const nextAttempt = (db: Db, tool: string, callKey: string): number => {

@@ -67,7 +67,7 @@ const scanQualifiers = (
     latest = hOf(between[3]!, between[5]);
     cut(between);
   }
-  const notBefore = remaining.match(/not\s+before\s+(\d{1,2})\s*(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)?/i);
+  const notBefore = remaining.match(/(?:not|never)\s+before\s+(\d{1,2})\s*(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)?/i);
   if (notBefore) {
     earliest = hOf(notBefore[1]!, notBefore[3]);
     cut(notBefore);

@@ -96,6 +96,27 @@ describe("hold_slot", () => {
     }
   });
 
+  it("the same user can hold their own held slot again: the new hold replaces the old one, others stay refused", () => {
+    const { db, clock, opts } = world({ settings: { priceDiffProb: 0 } });
+    const provider = firstProvider(db);
+    const days = slotWindow(clock);
+    const slot = freeSlots(db, { seed: opts.seed, clock }, provider.id, days[3]!, days[13]!)[0]!;
+    const first = holdSlot(db, opts, "u-a", { providerId: provider.id, slot });
+    const second = holdSlot(db, opts, "u-a", { providerId: provider.id, slot });
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(second.data.holdId).not.toBe(first.data.holdId);
+    // the replaced hold can no longer book
+    expect(book(db, opts, "u-a", { holdId: first.data.holdId, idempotencyKey: "k-old:1" })).toMatchObject({
+      ok: false,
+      error: "hold_expired",
+    });
+    expect(holdSlot(db, opts, "u-b", { providerId: provider.id, slot })).toMatchObject({
+      ok: false,
+      error: "slot_unavailable",
+    });
+  });
+
   it("a held slot is free again once it expires", () => {
     const { db, clock, opts } = world({ settings: { priceDiffProb: 0 } });
     const provider = firstProvider(db);

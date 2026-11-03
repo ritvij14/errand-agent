@@ -56,6 +56,26 @@ describe("drop a request (FR-16, V-10)", () => {
     t.testDb.close();
   });
 
+  it("'never mind, <new request>' abandons the current request and starts the new one in the same message", async () => {
+    const t = setup();
+    await t.say("book a plumber in Indiranagar");
+    const reply = await t.say("never mind, I want an electrician in HSR tomorrow");
+    expect(t.workflows()).toEqual([
+      { intent: "book", phase: "abandoned" },
+      { intent: "book", phase: "choosing" },
+    ]);
+    expect(t.latest().facts).toMatch(/electrician/);
+    expect(reply.message.text).toMatch(/^Okay, dropped\. Nothing was booked\. /);
+    t.testDb.close();
+  });
+
+  it("'never mind, <new request>' with nothing open just starts the new request", async () => {
+    const t = setup();
+    await t.say("never mind, I want an electrician in HSR tomorrow");
+    expect(t.workflows()).toEqual([{ intent: "book", phase: "choosing" }]);
+    t.testDb.close();
+  });
+
   it("dropping a reschedule says nothing was changed; dropping a cancel says the booking is unchanged", async () => {
     const t = setup();
     await t.say("move my AC servicing to Saturday afternoon");

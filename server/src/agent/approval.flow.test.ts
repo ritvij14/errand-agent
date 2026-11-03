@@ -128,6 +128,21 @@ describe("declining (R9: back by intent)", () => {
     t.testDb.close();
   });
 
+  it("after a decline, picking the same slot again gives a fresh card — the user's own hold doesn't block it", async () => {
+    const t = await setup();
+    const card = await t.toCard();
+    const declined = await t.click(card.approvalId, "decline");
+    if (!declined.ok) throw new Error(declined.code);
+    const options = t.part(declined.reply, "option_blocks")!.blocks as OptionBlock[];
+    const again = await t.say(options[0]!.slots[0]!.pickText);
+    const fresh = t.part(again, "approval_card") as unknown as Card | undefined;
+    expect(again.message.text).not.toMatch(/taken/i);
+    expect(fresh).toBeDefined();
+    expect(fresh!.slot).toBe(card.slot);
+    expect(t.workflow().phase).toBe("awaiting_approval");
+    t.testDb.close();
+  });
+
   it("a typed 'no' declines the waiting card the same way", async () => {
     const t = await setup();
     const card = await t.toCard();

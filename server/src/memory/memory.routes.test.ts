@@ -92,6 +92,25 @@ describe("the memory endpoints", () => {
     expect(memory.state(testDb.db, ALICE_ID, "area")).toMatchObject({ value: "koramangala" });
   });
 
+  it("PUT on an inferred fact: the user's edit makes it stated (MH-6 labels stay honest)", async () => {
+    const { fact } = memory.inferCandidate(
+      testDb.db,
+      CLOCK(),
+      ALICE_ID,
+      "preferred_provider",
+      "mp-002",
+      "electrician",
+      "booked twice",
+    );
+    const res = await call("put", aliceCookie, `/api/memory/${fact!.id}`, { value: "mp-007" });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ value: "mp-007", source: "stated", status: "active" });
+    expect(memory.state(testDb.db, ALICE_ID, "preferred_provider", "electrician")).toMatchObject({
+      value: "mp-007",
+      source: "stated",
+    });
+  });
+
   it("PUT validation: a bad area, a bad time and a missing value → VALIDATION_ERROR", async () => {
     const area = memory.saveStated(testDb.db, CLOCK(), ALICE_ID, "area", "hsr_layout")!;
     const time = memory.saveStated(testDb.db, CLOCK(), ALICE_ID, "earliest_time", "10:00")!;

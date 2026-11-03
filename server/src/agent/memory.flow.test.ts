@@ -127,7 +127,7 @@ describe("inferred preferred provider (U33, V-12, R9)", () => {
       status: "awaiting_confirmation",
     });
     expect(fact.evidence).toMatch(/as last time|booked/i);
-    expect(reply.message.text).toMatch(/keep them coming/i);
+    expect(reply.message.text).toMatch(/Your last electrical work booking was with .+ — keep them coming\?/);
     t.testDb.close();
   });
 });
@@ -173,6 +173,8 @@ describe("stated memory (MH-6)", () => {
     expect(f.area).toMatchObject({ value: "hsr_layout", source: "memory" });
     expect(f.area?.memoryFactId).toEqual(expect.any(String));
     expect(reply.message.text).toMatch(/saved area: HSR Layout/i);
+    // the ask names the details as the user reads them, never raw ids
+    expect(reply.message.text).toMatch(/Electrical work in HSR Layout — when\?$/);
     expect(t.phases(second.id)).toEqual(["collecting"]);
     t.testDb.close();
   });
@@ -190,6 +192,30 @@ describe("stated memory (MH-6)", () => {
     expect(memory.state(t.testDb.db, ALICE, "area")).toBeUndefined();
     const f = t.facts(c.id);
     expect(f.area).toBeUndefined();
+    t.testDb.close();
+  });
+
+  it("'forget everything you know about me' forgets every saved and waiting fact, and says what went", async () => {
+    const t = setup();
+    const c = t.conversation();
+    await c.say("I live in HSR");
+    await c.say("never before 10am");
+    const { fact } = memory.inferCandidate(
+      t.testDb.db,
+      createClock({ now: new Date("2026-11-02T03:45:00Z") }),
+      ALICE,
+      "preferred_provider",
+      "mp-002",
+      "electrician",
+      "booked twice",
+    );
+    const reply = await c.say("forget everything you know about me");
+    expect(reply.message.text).toMatch(/Forgotten: area, earliest time, preferred electrician/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([]);
+    // the waiting provider is blocked from re-inference like any forgotten value
+    expect(memory.blockedByForget(t.testDb.db, ALICE, "preferred_provider", fact!.value)).toBe(true);
+    const again = await c.say("forget everything");
+    expect(again.message.text).toMatch(/nothing saved/i);
     t.testDb.close();
   });
 
@@ -214,6 +240,54 @@ describe("stated memory (MH-6)", () => {
     const reply = await c.say("my area is Koramangala now"); // an explicit correction of the preference
     expect(memory.state(t.testDb.db, ALICE, "area")!.value).toBe("koramangala");
     expect(reply.message.text).toMatch(/Saved|updated|koramangala/i);
+    t.testDb.close();
+  });
+
+  it("a saved 'never before 10' also bounds a request that names only days; forgetting it keeps the days (MH-6, R6)", async () => {
+    const t = setup();
+    const c = t.conversation();
+    await c.say("never before 10am");
+    const reply = await c.say("plumber in HSR this week");
+    expect(reply.message.text).toMatch(/saved time: not before 10:00/i);
+    const offered = (
+      reply.message.parts.find((p) => (p as { type: string }).type === "option_blocks") as
+        { blocks: { slots: { start: string }[] }[] }
+    ).blocks.flatMap((b) => b.slots.map((s) => s.start.slice(11, 16)));
+    expect(offered.length).toBeGreaterThan(0);
+    expect(offered.every((time) => time >= "10:00")).toBe(true);
+    expect(t.facts(c.id).time_window).toMatchObject({
+      value: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: "10:00" },
+      source: "memory",
+    });
+    await c.say("forget my time");
+    const next = await c.say("what do you remember about me?");
+    void next;
+    expect(t.facts(c.id).time_window).toMatchObject({
+      value: { dateFrom: "2026-11-02", dateTo: "2026-11-08", earliest: null },
+    });
+    t.testDb.close();
+  });
+
+  it("a request's own earliest time wins over the saved one (V-11)", async () => {
+    const t = setup();
+    const c = t.conversation();
+    await c.say("never before 10am");
+    await c.say("plumber in HSR this week, after 12");
+    expect(t.facts(c.id).time_window).toMatchObject({ value: { earliest: "12:00" }, source: "user" });
+    t.testDb.close();
+  });
+
+  it("the brief's 'same electrician as last time, but not before 10 a.m.' starts a booking and saves nothing stated", async () => {
+    const t = setup();
+    const c = t.conversation();
+    await c.say("Book the same electrician as last time, but not before 10 a.m.");
+    expect(t.facts(c.id)).toMatchObject({
+      service: { value: "electrician" },
+      time_window: { value: { earliest: "10:00" } },
+    });
+    expect(memory.state(t.testDb.db, ALICE, "earliest_time")).toBeUndefined();
+    await c.say("Koramangala");
+    expect(t.facts(c.id)).toMatchObject({ service: { value: "electrician" }, area: { value: "koramangala" } });
     t.testDb.close();
   });
 

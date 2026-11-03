@@ -111,6 +111,15 @@ export const SERVICE_NAMES: Record<string, string> = {
   carpentry: "carpentry",
 };
 
+/** Who does the service: "your preferred electrician". */
+const SERVICE_LABEL: Record<string, string> = {
+  plumber: "plumber",
+  electrician: "electrician",
+  ac_servicing: "AC technician",
+  deep_cleaning: "cleaner",
+  carpentry: "carpenter",
+};
+
 export const AREA_NAMES: Record<string, string> = {
   indiranagar: "Indiranagar",
   koramangala: "Koramangala",
@@ -462,7 +471,10 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
 
     if (read.kind === "drop") {
       const current = getActive(conversationId);
-      if (!current) return { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
+      if (!current)
+        return read.rest
+          ? applyUserText(userId, conversationId, read.rest)
+          : { phase: "collecting", reply: "", code: "NOT_UNDERSTOOD", facts: {} as Facts };
       voidOpenApproval(current, "user_dropped");
       const saved = saveWorkflow(conversationId, current.version, (w) => ({
         ...w,
@@ -474,9 +486,14 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         toPhase: "abandoned",
         reason: "user dropped",
       });
+      const dropped = DROP_REPLY[(current.intent ?? "book") as keyof typeof DROP_REPLY];
+      if (saved.ok && read.rest) {
+        const next = await applyUserText(userId, conversationId, read.rest);
+        return { ...next, reply: `${dropped} ${next.reply}`.trim() };
+      }
       return {
         phase: "abandoned",
-        reply: DROP_REPLY[(current.intent ?? "book") as keyof typeof DROP_REPLY],
+        reply: dropped,
         facts: {} as Facts,
         code: saved.ok ? undefined : "unknown_error",
       };
@@ -538,14 +555,17 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         trace?.record("memory_event", { event: "used", key: "area", value: saved.value });
       }
     }
-    if (!facts.time_window) {
+    // the saved earliest time is a time of day: it also bounds a request that named only
+    // days ("this week"), unless the request gave its own earliest time or ends before it
+    const userWindow = facts.time_window?.value ?? null;
+    if (!userWindow || userWindow.earliest === null) {
       const savedTime = memoryApi.state(db, userId, "earliest_time");
-      if (savedTime) {
+      if (savedTime && (userWindow?.latest == null || userWindow.latest > savedTime.value)) {
         const window = {
-          dateFrom: null,
-          dateTo: null,
+          dateFrom: userWindow?.dateFrom ?? null,
+          dateTo: userWindow?.dateTo ?? null,
           earliest: savedTime.value,
-          latest: null,
+          latest: userWindow?.latest ?? null,
         } as TimeWindow;
         facts.time_window = memoryFactOf("earliest_time", savedTime, window) as Fact & { value: TimeWindow };
         memoryNotes.push(`Using your saved time: not before ${savedTime.value} (say if that's changed).`);
@@ -1258,10 +1278,20 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
         .get(fact.memoryFactId) as { status: string; value: string } | undefined;
       if (!stored) continue;
       if (stored.status === "forgotten" || !record) {
-        delete facts[key];
+        // a time window merged from the request's days keeps those days; only the remembered bound goes
+        const kept = key === "time_window" ? { ...(fact.value as TimeWindow), earliest: null } : null;
+        if (kept && (kept.dateFrom !== null || kept.dateTo !== null || kept.latest !== null))
+          facts.time_window = { value: kept, source: "user", updatedAt: nowMs() } as Fact & {
+            value: TimeWindow;
+          };
+        else delete facts[key];
         changed = true;
         trace?.record("memory_event", { event: "blocked-by-forget", key, value: null });
-        notes.push("Your saved area is gone — I'll ask for it again.");
+        notes.push(
+          key === "area"
+            ? "Your saved area is gone — I'll ask for it again."
+            : "Your saved time is gone — I've stopped using it.",
+        );
         continue;
       }
       // corrected: for the time fact compare only the remembered bound
@@ -1328,6 +1358,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     syncNote: string,
   ): ApplyOutcome {
     void current;
+    if (key === "all") return memoryForgetAll(current, userId, syncNote);
     const result = memoryApi.forget(db, clock, userId, key, undefined, (record) =>
       trace?.record("memory_event", { event: "forgotten", key: record.key, value: record.value }),
     );
@@ -1340,6 +1371,31 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     return {
       phase: current?.phase ?? "collecting",
       reply: `${syncNote}Forgotten. I'll ask for it again next time we book.`,
+      facts: current?.facts ?? ({} as Facts),
+    };
+  }
+
+  /** "forget everything": every active fact is forgotten, every waiting one rejected (also a forget marker). */
+  function memoryForgetAll(current: WorkflowRow | undefined, userId: string, syncNote: string): ApplyOutcome {
+    const traced = (record: memoryApi.MemoryFactRecord) =>
+      trace?.record("memory_event", { event: "forgotten", key: record.key, value: record.value });
+    const facts = memoryApi.view(db, userId);
+    for (const f of facts) {
+      if (f.status === "active") memoryApi.forget(db, clock, userId, f.key, f.service ?? undefined, traced);
+      else memoryApi.reject(db, clock, userId, f.id, traced);
+    }
+    const names = facts.map((f) =>
+      f.key === "area"
+        ? "area"
+        : f.key === "earliest_time"
+          ? "earliest time"
+          : `preferred ${f.service ? (SERVICE_LABEL[f.service] ?? f.service) : "provider"}`,
+    );
+    return {
+      phase: current?.phase ?? "collecting",
+      reply: names.length
+        ? `${syncNote}Forgotten: ${names.join(", ")}. I'll ask again next time we book.`
+        : `${syncNote}There's nothing saved to forget.`,
       facts: current?.facts ?? ({} as Facts),
     };
   }
@@ -1422,7 +1478,9 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       (event, r) => trace?.record("memory_event", { event, key: r.key, value: r.value }),
     );
     if (!result.created || !result.fact) return undefined;
-    const ask = `Your last ${sameAsLast ? "" : "two "}${label} bookings ${sameAsLast ? "was" : "were"} with ${pick.name} — keep them coming?`;
+    const ask = sameAsLast
+      ? `Your last ${label} booking was with ${pick.name} — keep them coming?`
+      : `Your last two ${label} bookings were with ${pick.name} — keep them coming?`;
     return { ask, providerName: pick.name, providerId, factId: result.fact.id };
   }
 
@@ -2119,14 +2177,18 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       const asks = missing.map((key) =>
         key === "area" ? "which area" : key === "time_window" ? "when" : `which ${key}`,
       );
-      const known = Object.entries(w.facts)
-        .filter(([key]) => key !== "time_window" && w.facts[key as keyof Facts] !== undefined)
-        .map(([, v]) => (typeof (v as Fact).value === "string" ? ((v as Fact).value as string) : null))
-        .filter((s) => s !== null);
-      const subject = known.length > 0 ? known.join(", ") : "that";
+      // the known details as the user reads them ("Plumbing in HSR Layout"), never raw ids
+      const service = w.facts.service?.value as string | undefined;
+      const area = w.facts.area?.value as string | undefined;
+      const serviceName = service ? (SERVICE_NAMES[service] ?? service) : "";
+      const areaName = area ? (AREA_NAMES[area] ?? area) : "";
+      const known = serviceName && areaName ? `${serviceName} in ${areaName}` : serviceName || areaName;
+      const subject = known ? known[0]!.toUpperCase() + known.slice(1) : "";
       return {
         phase: "collecting",
-        reply: `${subject ? `${subject} — ` : ""}${asks.join(" and ")}?`,
+        reply: subject
+          ? `${subject} — ${asks.join(" and ")}?`
+          : `${asks.join(" and ")[0]!.toUpperCase()}${asks.join(" and ").slice(1)}?`,
         facts: w.facts,
         code: errorCode,
       };

@@ -29,7 +29,8 @@ export type ReadResult =
       mergeTime?: boolean;
       budget?: number | "any";
     }
-  | { kind: "drop" }
+  /** `rest`: a new request said in the same breath ("never mind, I want an electrician") */
+  | { kind: "drop"; rest?: string }
   | { kind: "decision"; decision: "yes" | "no" }
   | { kind: "pick"; providerId: string; slot: string }
   | { kind: "pick_unclear" }
@@ -56,6 +57,7 @@ const VAGUE_PICK_RE = /\b(first|second|third|fourth|fifth|last|that|this|other) 
 const MEMORY_VIEW_RE = /what do you remember|what'?'s remembered|my preferences[?]*$/i;
 const MEMORY_FORGET_RE =
   /\bforget (?:my |the )?(area|saved area|time|saved provider|preferred provider|provider)\b/i;
+const MEMORY_FORGET_ALL_RE = /\bforget\b[^.?!]*\b(?:everything|all)\b|\bforget (?:about )?me\b|\bforget my preferences\b/i;
 const MEMORY_FORGET_KEYS: Record<string, string> = {
   area: "area",
   "saved area": "area",
@@ -65,11 +67,18 @@ const MEMORY_FORGET_KEYS: Record<string, string> = {
   "preferred provider": "preferred_provider",
 };
 const MEMORY_AREA_SAVE_RE = /\b(?:i live in|remember (?:that )?i live in|my area is|always in)\b/i;
-const MEMORY_TIME_SAVE_RE = /\b(?:never|not)\s+before\b/i;
+// only "never before" is lasting; "not before 10" is this request's time (design 2.5.8 vs time_window)
+const MEMORY_TIME_SAVE_RE = /\bnever\s+before\b/i;
 const SAMELAST_RE = /\bsame\b[^.?!]*\bas last time\b/i;
 
-/** A lasting statement → a memory fact to save. Undefined for one-off details. */
+/**
+ * A lasting statement → a memory fact to save. Undefined for one-off details.
+ * @remarks A message naming a service is a booking request: it reads as one, so its
+ * details are used for this request and never saved (MH-1 keeps the request, MH-6 saves
+ * only standalone lasting statements).
+ */
 const readMemorySave = (text: string, clock: Clock): ReadResult | undefined => {
+  if (findService(text).service) return undefined;
   if (MEMORY_AREA_SAVE_RE.test(text)) {
     for (const [phrase, canonical] of Object.entries(AREA_SYNONYMS)) {
       if (new RegExp(`\\b${phrase.replace(/[-]/g, "\\-")}\\b`, "i").test(text))
@@ -140,7 +149,20 @@ export const AREA_SYNONYMS: Record<string, string> = {
   whitefield: "whitefield",
 };
 
-const DROP_RE = /never mind|forget it|stop|not that|don't need|cancel that/i;
+// A drop is said at the start of the message, never inside a sentence ("the tap won't stop").
+// The unambiguous phrases may carry a new request after them; "stop" / "not that" must stand
+// alone ("not that expensive" is not a drop); "I don't need it" drops the whole message.
+const DROP_LEAD_RE = /^\s*(?:never\s*mind|forget (?:it|that)|cancel that)\b[\s,.!;:-]*/i;
+const DROP_ALONE_RE = /^\s*(?:stop|not that)[\s.!]*$/i;
+const DROP_WHOLE_RE = /^\s*(?:i\s+)?(?:don'?t|do not) need\b/i;
+
+const readDrop = (text: string): ReadResult | undefined => {
+  if (DROP_ALONE_RE.test(text) || DROP_WHOLE_RE.test(text)) return { kind: "drop" };
+  const lead = DROP_LEAD_RE.exec(text);
+  if (!lead) return undefined;
+  const rest = text.slice(lead[0].length).trim();
+  return rest ? { kind: "drop", rest } : { kind: "drop" };
+};
 const CANCEL_RE = /\bcancel\b/i;
 // "move it to 11" stays a correction; only "move my …" / "reschedule" starts a reschedule
 const RESCHEDULE_RE = /\breschedule\b|\bmove my\b/i;
@@ -202,11 +224,13 @@ export const readUserMessage = async (
   clock: Clock,
   options?: OptionBlock[],
 ): Promise<ReadResult> => {
-  if (DROP_RE.test(text)) return { kind: "drop" };
+  const drop = readDrop(text);
+  if (drop) return drop;
   if (PLAIN_YES.test(text)) return { kind: "decision", decision: "yes" };
   if (PLAIN_NO.test(text)) return { kind: "decision", decision: "no" };
   // MH-6: only explicit, lasting statements become memory; a one-off detail falls through
   // to the normal read and is never saved.
+  if (MEMORY_FORGET_ALL_RE.test(text)) return { kind: "memory_forget", key: "all" };
   if (MEMORY_VIEW_RE.test(text)) return { kind: "memory_view" };
   const memoryKey = MEMORY_FORGET_RE.exec(text);
   if (memoryKey)

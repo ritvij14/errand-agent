@@ -53,21 +53,31 @@ const randomHour = (seed: string, providerId: string, dateKey: string, attempt: 
 export type FreeSlotsOpts = { seed: string; clock: Clock };
 
 // The provider's free slots between `from` and `to` (IST date keys, inclusive):
-// seeded hours minus past (by the clock), minus bookings, minus unexpired holds.
-export const freeSlots = (db: Db, opts: FreeSlotsOpts, providerId: string, from: string, to: string): string[] => {
+// seeded hours minus past (by the clock), minus bookings, minus unexpired holds —
+// except `holderId`'s own holds, which never block that user's re-hold.
+export const freeSlots = (
+  db: Db,
+  opts: FreeSlotsOpts,
+  providerId: string,
+  from: string,
+  to: string,
+  holderId?: string,
+): string[] => {
   const days = slotWindow(opts.clock).filter((d) => d >= from && d <= to);
   const out: string[] = [];
   const nowMs = opts.clock.now().getTime();
   const bookedStmt = db.prepare(
     `SELECT COUNT(*) AS c FROM mock_booking WHERE provider_id = ? AND slot = ? AND status = 'booked'`,
   );
-  const heldStmt = db.prepare(`SELECT COUNT(*) AS c FROM mock_hold WHERE provider_id = ? AND slot = ? AND expires_at > ?`);
+  const heldStmt = db.prepare(
+    `SELECT COUNT(*) AS c FROM mock_hold WHERE provider_id = ? AND slot = ? AND expires_at > ? AND user_id IS NOT ?`,
+  );
   for (const day of days) {
     for (const hour of seededHours(opts.seed, providerId, day)) {
       const slot = slotStarts(hour, day);
       if (Date.parse(slot) <= nowMs) continue;
       if ((bookedStmt.get(providerId, slot) as { c: number }).c > 0) continue;
-      if ((heldStmt.get(providerId, slot, nowMs) as { c: number }).c > 0) continue;
+      if ((heldStmt.get(providerId, slot, nowMs, holderId ?? null) as { c: number }).c > 0) continue;
       out.push(slot);
     }
   }

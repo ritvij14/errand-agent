@@ -81,6 +81,43 @@ _Format per entry: what broke · why · where fixed · the regression test that 
 - **Regression tests (red → green).** `client/src/screens/Chat.test.tsx` "a chat message that saves a preference shows it in the memory panel without a reload" (red: `/you told me/` not found); "the new reply's trace starts loading with the conversation reload, not after it" (red: trace never called with `r9`).
 - **Commit.** post-U40.
 
+_B9–B13 were found by the post-build requirements review (driving the agent through the eval runner with the brief's own example sentences)._
+
+### B9 — Editing an inferred fact in the memory panel kept it labelled "inferred"
+
+- **What broke.** Editing a waiting inferred provider made it active but still labelled "I worked out" — it looked like an inferred fact used without confirmation (MH-6).
+- **Why.** `saveStated`'s `ON CONFLICT` updated value and status but never `source`; the route test only edited an already-stated fact.
+- **Fix.** `server/src/memory/memory.repo.ts`: the conflict update also sets `source = 'stated'`.
+- **Regression test (red → green).** `memory/memory.routes.test.ts` "PUT on an inferred fact: the user's edit makes it stated (MH-6 labels stay honest)".
+
+### B10 — Declining a card, then picking the same slot, said "That slot was just taken"
+
+- **What broke.** After Decline, choosing the same slot again failed; the slot read as taken for up to 10 minutes.
+- **Why.** The user's own hold from before the decline stayed live, and `hold_slot`'s free check counted every unexpired hold, the caller's included.
+- **Fix.** `server/src/tools/slots.ts` `freeSlots(…, holderId)` skips the caller's own holds; `holdSlot` replaces the caller's old hold on that slot. Other users are still refused.
+- **Regression tests (red → green).** `agent/approval.flow.test.ts` "after a decline, picking the same slot again gives a fresh card — the user's own hold doesn't block it"; `tools/write-tools.test.ts` "the same user can hold their own held slot again: the new hold replaces the old one, others stay refused".
+
+### B11 — The brief's "same electrician as last time, but not before 10 a.m." was saved as a preference and the booking lost
+
+- **What broke.** The reply was "Saved: your saved earliest time is not before 10:00."; the electrician request vanished, so "Koramangala" next got "which service?" (MH-1), and a one-off detail became a stated preference (MH-6).
+- **Why.** The memory-save read ran before the request read and matched `(never|not) before` anywhere in the message.
+- **Fix.** `server/src/agent/model.ts`: a message naming a service is a request, never a memory save; only "never before" is lasting. `time-window.ts` reads "never before" as a bound too.
+- **Regression tests (red → green).** `agent/model-v1.test.ts` "a 'not before' inside a booking request is this request's time, never a saved preference (MH-1, MH-6)"; `agent/memory.flow.test.ts` "the brief's 'same electrician as last time, but not before 10 a.m.' starts a booking and saves nothing stated".
+
+### B12 — "My tap won't stop leaking" dropped the request
+
+- **What broke.** "stop", "not that", "don't need" anywhere in a message read as a drop: "plumber in HSR, my kitchen tap won't stop leaking" and "…not that expensive please" got the help reply; "never mind, I want an electrician…" lost the new request.
+- **Why.** `DROP_RE` had no position or word limits and ran first.
+- **Fix.** `server/src/agent/model.ts` `readDrop`: drops only at the start of the message; "never mind / forget it / cancel that, <request>" carries the request as `rest`, which the workflow applies after dropping.
+- **Regression tests (red → green).** `agent/model-v1.test.ts` "drop words inside an ordinary sentence are not a drop (FR-16)", "'never mind, <new request>' drops and carries the new request along"; `agent/task-switch.flow.test.ts` the two "'never mind, <new request>'" tests.
+
+### B13 — A saved "never before 10" was ignored once the user named a day
+
+- **What broke.** After "never before 10", "plumber in HSR this week" offered 08:00 and 09:00 slots.
+- **Why.** Memory filled the time window only when the request had none at all.
+- **Fix.** `server/src/agent/workflow.ts`: the saved earliest time also bounds a request window without its own earliest; forgetting it keeps the request's days (`syncMemoryFacts`), with a time-specific note (it used to say "Your saved area is gone").
+- **Regression tests (red → green).** `agent/memory.flow.test.ts` "a saved 'never before 10' also bounds a request that names only days; forgetting it keeps the days (MH-6, R6)"; "a request's own earliest time wins over the saved one (V-11)" (guard, green from the start).
+
 ## Invariants found broken by tests
 
 _None yet._

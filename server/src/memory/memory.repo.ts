@@ -96,7 +96,7 @@ export const saveStated = (
   db.prepare(
     `INSERT INTO memory_fact (id, user_id, key, service, value, source, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 'stated', 'active', ?, ?)
-       ON CONFLICT(id) DO UPDATE SET value = excluded.value, status = 'active', updated_at = excluded.updated_at, forgotten_at = NULL`,
+       ON CONFLICT(id) DO UPDATE SET value = excluded.value, source = 'stated', status = 'active', updated_at = excluded.updated_at, forgotten_at = NULL`,
   ).run(id, userId, key, service, value, now, now);
   const row = db.prepare(`SELECT * FROM memory_fact WHERE id = ?`).get(id) as Record<string, unknown>;
   const record = decode(row);

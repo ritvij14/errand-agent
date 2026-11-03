@@ -97,12 +97,46 @@ describe("corrections (R9)", () => {
       value: "10:00",
     });
     expect(await read("forget my area")).toMatchObject({ kind: "memory_forget", key: "area" });
+    for (const text of ["forget everything you know about me", "forget all my preferences", "forget me"])
+      expect(await read(text)).toEqual({ kind: "memory_forget", key: "all" });
     expect(await read("what do you remember about me?")).toMatchObject({ kind: "memory_view" });
     // a one-off area is a booking request, never a memory save
     expect(await read("plumber in HSR")).toMatchObject({
       kind: "workflow",
       intent: "book",
       area: "hsr_layout",
+    });
+  });
+
+  it("a 'not before' inside a booking request is this request's time, never a saved preference (MH-1, MH-6)", async () => {
+    expect(await read("Book the same electrician as last time, but not before 10 a.m.")).toMatchObject({
+      kind: "workflow",
+      intent: "book",
+      service: "electrician",
+      sameAsLast: true,
+      timeWindow: { earliest: "10:00" },
+    });
+    expect(await read("electrician in Koramangala tomorrow, not before 10am")).toMatchObject({
+      kind: "workflow",
+      service: "electrician",
+      area: "koramangala",
+      timeWindow: { dateFrom: "2026-11-03", earliest: "10:00" },
+    });
+    // a request that names a service stays a request even with lasting phrasing
+    expect(await read("plumber in HSR tomorrow, never before 10am")).toMatchObject({
+      kind: "workflow",
+      service: "plumber",
+      timeWindow: { earliest: "10:00" },
+    });
+    expect(await read("I need a plumber, I live in HSR")).toMatchObject({
+      kind: "workflow",
+      service: "plumber",
+      area: "hsr_layout",
+    });
+    // a bare 'not before 10' answers 'when?' — only 'never before' is lasting
+    expect(await read("not before 10am")).toMatchObject({
+      kind: "workflow",
+      timeWindow: { earliest: "10:00" },
     });
   });
 
@@ -113,6 +147,32 @@ describe("corrections (R9)", () => {
     expect(await read("forget it")).toMatchObject({ kind: "drop" });
     expect(await read("cancel my AC servicing")).toMatchObject({ kind: "cancel" });
     expect(await read("cancel my AC servicing")).not.toMatchObject({ kind: "drop" });
+  });
+
+  it("drop words inside an ordinary sentence are not a drop (FR-16)", async () => {
+    expect(await read("I need a plumber in HSR, my kitchen tap wont stop leaking")).toMatchObject({
+      kind: "workflow",
+      service: "plumber",
+      area: "hsr_layout",
+    });
+    expect(await read("plumber in HSR this week, not that expensive please")).toMatchObject({
+      kind: "workflow",
+      service: "plumber",
+    });
+    expect(await read("not that expensive please")).not.toMatchObject({ kind: "drop" });
+    expect(await read("I don't need it anymore")).toEqual({ kind: "drop" });
+    expect(await read("Stop.")).toEqual({ kind: "drop" });
+  });
+
+  it("'never mind, <new request>' drops and carries the new request along", async () => {
+    expect(await read("never mind, I want an electrician in HSR tomorrow")).toEqual({
+      kind: "drop",
+      rest: "I want an electrician in HSR tomorrow",
+    });
+    expect(await read("forget it. electrician in Koramangala")).toEqual({
+      kind: "drop",
+      rest: "electrician in Koramangala",
+    });
   });
 
   it('"tell me about provider 2" / a provider name with options → details read (FR-6)', async () => {
