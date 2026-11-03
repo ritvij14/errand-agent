@@ -51,4 +51,16 @@ export const isOptionBlocks = (part: unknown): part is OptionBlocksPart =>
 export const isApprovalCard = (part: unknown): part is ApprovalCardPart =>
   (part as { type?: string } | null)?.type === "approval_card";
 
+/** An inferred memory fact waiting for the user's yes / no (2.5.8) — drawn from the fact record. */
+export type MemoryConfirmPart = {
+  type: "memory_confirm";
+  factId: string;
+  key: string;
+  label: string;
+  ask: string;
+};
+
+export const isMemoryConfirm = (part: unknown): part is MemoryConfirmPart =>
+  (part as { type?: string } | null)?.type === "memory_confirm";
+
 export const rupees = (n: number): string => `₹${n.toLocaleString("en-IN")}`;

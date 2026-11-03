@@ -8,17 +8,12 @@
 
 ## 1. Scope and How to Read This Doc
 
-The system is designed at two levels, in two docs:
-
-| Level                                                                                          | What it is                                                         | Status                                                             |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| **Level 1 — Assignment system** (this doc)                                                     | What we build to meet the brief: local, mocked tools, mock model   | **The code follows this. Binding.**                                |
-| **Level 2 — Production system** ([`system-design-production.md`](system-design-production.md)) | How the same design would change for a real product at large scale | **TBD — not discussed until Level 1 is fully built. Never built.** |
+This doc is the **Level 1 — Assignment system**: what we build to meet the brief (local, mocked tools, mock model). **The code follows it. Binding.** There is no separate production design doc; how the design changes at scale is the "what breaks first at 100×" section of the design note (`docs/design-note.md`).
 
 Rules:
 
-1. Code follows Level 1 only. Nothing from Level 2 gets implemented unless the user explicitly asks.
-2. Both levels use the same structure: functional requirements → non-functional requirements → scale → HLD → LLD.
+1. Code follows this doc.
+2. Structure: functional requirements → non-functional requirements → scale → HLD → LLD.
 3. Every ambiguity in the brief we resolve is written down where it is resolved, marked **Reading:** (the brief says "pick a reasonable reading and write it down").
 4. Every Reading we are not sure of also goes in **2.6 Readings to verify** so it gets checked while building and in the evals.
 
@@ -79,7 +74,7 @@ What the system must do. **Source** says where each one comes from: the brief, o
 
 ### 2.3 Scale
 
-> Status: **Done** (interview round 4). Level 1 runs on one machine for one person at a time, so "scale" here means the size of the mock world and what happens when requests overlap. Real load numbers belong to Level 2.
+> Status: **Done** (interview round 4). Level 1 runs on one machine for one person at a time, so "scale" here means the size of the mock world and what happens when requests overlap. Real load numbers belong to the design note's 100× section.
 
 **Users:** 2–3 seeded demo users plus anyone who signs up. Expected use: one person at a time.
 
@@ -770,7 +765,7 @@ Through chat and the memory panel (FR-12) — both call the same memory code.
 | View                      | "What do you remember about me?"                      | Lists `active` and `awaiting_confirmation` facts, each labelled stated / inferred / waiting for your confirmation                                                                                                              |
 | Correct                   | "My area is Koramangala now"                          | Value replaced, `source = stated`. If a workflow is open, its detail is corrected too (MH-1)                                                                                                                                   |
 | Forget                    | "Forget my area"                                      | `status = forgotten`; never used again. The record stays as a hidden marker (key + value) that **blocks re-inferring** that same value from booking history. If the user later states it again, that's allowed — their choice. |
-| Confirm / reject inferred | "Yes" to the agent's question, or the panel's buttons | `active` / `forgotten`                                                                                                                                                                                                         |
+| Confirm / reject inferred | Keep / Don't keep on the chat's memory card, a typed yes / no (both carry the card's `memoryFactId` and decide only that fact while it is still waiting), or the panel's buttons | `active` / `forgotten`                                                                                                                                                                                                         |
 
 #### 2.5.9 Traces
 
@@ -962,5 +957,5 @@ None right now.
 | MH-6 Memory                             | 2.5.8                                                        |
 | MH-7 Traces                             | 2.5.9                                                        |
 | MH-8 Evals                              | 2.5.10                                                       |
-| Deliverable 2 — design note topics      | 2.5.2, 2.5.5, 2.5.6, 2.5.8, 2.5.9; the 100× paragraph lives in the note itself (`docs/design-note.md`, R12 — not in the TBD production doc) |
+| Deliverable 2 — design note topics      | 2.5.2, 2.5.5, 2.5.6, 2.5.8, 2.5.9; the 100× paragraph lives in the note itself (`docs/design-note.md`, R12) |
 | Deliverable 5 — annotated trace excerpt | 2.5.9 (after the build)                                      |

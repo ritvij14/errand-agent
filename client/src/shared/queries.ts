@@ -41,8 +41,15 @@ const refreshConversation = (client: ReturnType<typeof useQueryClient>, id: stri
 export const useSendMessage = (id: string) => {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ text, approvalId }: { text: string; approvalId?: string }) =>
-      api.sendMessage(id, text, randomUUID(), approvalId),
+    mutationFn: ({
+      text,
+      approvalId,
+      memoryFactId,
+    }: {
+      text: string;
+      approvalId?: string;
+      memoryFactId?: string;
+    }) => api.sendMessage(id, text, randomUUID(), approvalId, memoryFactId),
     onSuccess: (reply) => refreshConversation(client, id, reply.runId),
   });
 };

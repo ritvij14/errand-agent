@@ -16,11 +16,18 @@ import {
 import type { Message } from "../shared/api-client.js";
 import { MemoryPanel } from "../components/MemoryPanel.js";
 import { TracePanel } from "../components/TracePanel.js";
-import { isApprovalCard, isBookingsList, isOptionBlocks, isProviderDetails } from "../shared/parts.js";
+import {
+  isApprovalCard,
+  isBookingsList,
+  isMemoryConfirm,
+  isOptionBlocks,
+  isProviderDetails,
+} from "../shared/parts.js";
 import { OptionBlocks } from "../components/OptionBlocks.js";
 import { ApprovalCard } from "../components/ApprovalCard.js";
 import { BookingsList } from "../components/BookingsList.js";
 import { ProviderDetails } from "../components/ProviderDetails.js";
+import { MemoryConfirmCard } from "../components/MemoryConfirmCard.js";
 
 // The chat page: conversation list + message view + composer (§ 2.4). Send is
 // disabled while a reply is pending (2.3: both sides block overlapping sends).
@@ -45,17 +52,19 @@ export function Chat() {
   const [draft, setDraft] = useState("");
   // 2.3: nothing new is sent — typed, tapped or clicked — while a reply is pending
   const busy = sendMessage.isPending || decide.isPending || create.isPending || signOut.isPending;
-  // the newest card on screen: a typed yes / no answers that card (§ 2.5.5 rule 1)
-  const shownCardId = messages
+  // the newest card on screen: a typed yes / no answers that card (§ 2.5.5 rule 1, 2.5.8)
+  const newestCard = messages
     .flatMap((m) => m.parts ?? [])
-    .filter(isApprovalCard)
-    .at(-1)?.approvalId;
+    .filter((p) => isApprovalCard(p) || isMemoryConfirm(p))
+    .at(-1);
+  const shownCardId = isApprovalCard(newestCard) ? newestCard.approvalId : undefined;
+  const shownFactId = isMemoryConfirm(newestCard) ? newestCard.factId : undefined;
   const trace = useTrace(shownRunId, shownRunId !== null);
   const send = () => {
     const text = draft.trim();
     if (!text || !selected || busy) return;
     setDraft("");
-    sendMessage.mutate({ text, approvalId: shownCardId });
+    sendMessage.mutate({ text, approvalId: shownCardId, memoryFactId: shownFactId });
   };
 
   return (
@@ -122,6 +131,13 @@ export function Chat() {
                       card={part}
                       disabled={busy}
                       onDecide={(approvalId, decision) => decide.mutate({ approvalId, decision })}
+                    />
+                  ) : isMemoryConfirm(part) ? (
+                    <MemoryConfirmCard
+                      key={i}
+                      card={part}
+                      disabled={busy}
+                      onAnswer={(memoryFactId, answer) => sendMessage.mutate({ text: answer, memoryFactId })}
                     />
                   ) : isBookingsList(part) ? (
                     <BookingsList key={i} part={part} />

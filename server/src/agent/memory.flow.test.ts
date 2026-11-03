@@ -22,8 +22,8 @@ const setup = () => {
   const service = createConversationService({ db: testDb.db, clock, model: scriptedModel });
   const conversation = () => {
     const id = service.createConversation(ALICE).id;
-    const say = async (text: string) => {
-      const result = await service.sendMessage(ALICE, id, text, randomUUID());
+    const say = async (text: string, memoryFactId?: string) => {
+      const result = await service.sendMessage(ALICE, id, text, randomUUID(), undefined, memoryFactId);
       if (!result.ok) throw new Error(result.code);
       return result.reply;
     };
@@ -204,6 +204,54 @@ describe("inferred area and earliest time (2.5.8: same value twice)", () => {
     });
     expect(t.facts(c.id).area).toMatchObject({ value: "jayanagar", source: "memory" });
     expect(t.phases(c.id).at(-1)).toBe("choosing");
+    t.testDb.close();
+  });
+
+  it("the proposal comes with a memory card naming the waiting fact; 'yes' carrying that id confirms it", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    const reply = await c.say("book a plumber this week");
+    const waiting = memory.view(t.testDb.db, ALICE)[0]!;
+    expect(reply.message.parts).toContainEqual(
+      expect.objectContaining({
+        type: "memory_confirm",
+        factId: waiting.id,
+        key: "area",
+        label: "Jayanagar",
+      }),
+    );
+    await c.say("yes", waiting.id);
+    expect(memory.state(t.testDb.db, ALICE, "area")).toMatchObject({ id: waiting.id, value: "jayanagar" });
+    t.testDb.close();
+  });
+
+  it("a 'yes' carrying a different fact's id never confirms the waiting one", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    await c.say("book a plumber this week");
+    const reply = await c.say("yes", "mf-some-older-card");
+    expect(reply.message.text).toMatch(/no longer open/i);
+    expect(memory.view(t.testDb.db, ALICE)).toEqual([
+      expect.objectContaining({ key: "area", status: "awaiting_confirmation" }),
+    ]);
+    expect(t.facts(c.id).area).toBeUndefined();
+    t.testDb.close();
+  });
+
+  it("Keep on a card already answered in the memory panel changes nothing and says so — never a booking report", async () => {
+    const t = setup();
+    twoInJayanagar(t);
+    const c = t.conversation();
+    await c.say("book a plumber this week");
+    const waiting = memory.view(t.testDb.db, ALICE)[0]!;
+    memory.reject(t.testDb.db, createClock({ now: new Date("2026-11-02T03:50:00Z") }), ALICE, waiting.id);
+    const reply = await c.say("yes", waiting.id);
+    expect(reply.message.text).toMatch(/already answered/i);
+    expect(reply.message.text).not.toMatch(/booked/i);
+    expect(memory.byId(t.testDb.db, ALICE, waiting.id)).toMatchObject({ status: "forgotten" });
+    expect(t.facts(c.id).area).toBeUndefined();
     t.testDb.close();
   });
 

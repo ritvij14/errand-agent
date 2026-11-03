@@ -104,7 +104,7 @@ Full 9-step flow: `docs/system-design.md` § 2.4. In short:
 - Mock-first LLM, live model optional behind an adapter (ADR-002)
 - SQLite for all persistence — chat, bookings, approvals, memory, traces (ADR-003)
 
-**System design:** two levels in two docs. **Code follows Level 1 (assignment system) only** — [`docs/system-design.md`](docs/system-design.md). Level 2 (production system) — [`docs/system-design-production.md`](docs/system-design-production.md) — is TBD and not discussed until Level 1 is fully built; it is estimates, never built here — do not implement anything from it unless the user explicitly asks. The graded 2-page note (deliverable 2) will be `docs/design-note.md`, condensed from this doc after the build.
+**System design:** **Code follows Level 1 (assignment system)** — [`docs/system-design.md`](docs/system-design.md). There is no production design doc; the scale view is the "what breaks first at 100×" section of the graded 2-page note (deliverable 2), `docs/design-note.md`.
 
 ## 4. Conventions
 
@@ -300,7 +300,6 @@ Verified from a fresh `git clone` (U38). Git-ignored folders (`server/data/`, `t
 | Patterns                | [docs/infra/patterns.md](docs/infra/patterns.md)                                                               |
 | Testing                 | [docs/infra/testing.md](docs/infra/testing.md)                                                                 |
 | System design (Level 1) | [docs/system-design.md](docs/system-design.md) — binding; the code follows it                                  |
-| System design (Level 2) | [docs/system-design-production.md](docs/system-design-production.md) — TBD until Level 1 is built; never built |
 | [Add more as needed]    |                                                                                                                |
 
 ---

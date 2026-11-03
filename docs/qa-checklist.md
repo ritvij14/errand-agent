@@ -38,6 +38,8 @@ The one manual step in the build plan (ADR-006). Every page feature from U14, U2
 - [ ] `I live in Koramangala` → **Saved preferences** shows the area as "you told me".
 - [ ] **Edit** → change to HSR Layout → **Save**: the panel updates; `book a carpenter tomorrow` says "Using your saved area: HSR Layout".
 - [ ] `book the same electrician as last time in Indiranagar tomorrow` → the panel shows Namma Wires & Lights as "I worked out" with an evidence line and **Confirm / Reject**.
+- [ ] The same reply shows a **memory card** in the chat with **Keep / Don't keep**; **Keep** makes it active and narrows the options to that provider (the panel agrees).
+- [ ] On a new proposal, **Reject** it in the panel first, then click **Keep** on the chat card: the reply says you already answered it, and nothing is used.
 - [ ] **Confirm** makes it active; **Forget** removes it from the panel and it is not used again.
 - [ ] The panel's buttons are disabled while a reply is pending.
 

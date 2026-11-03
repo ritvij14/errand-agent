@@ -300,6 +300,8 @@ export const createConversationService = (deps: ConversationsDeps) => {
       text: string | undefined,
       clientMessageId: string | undefined,
       approvalId?: string,
+      /** the memory card the user answered (2.5.8), so a yes binds to that fact only */
+      memoryFactId?: string,
     ): Promise<SendResult> => {
       if (
         typeof text !== "string" ||
@@ -346,7 +348,7 @@ export const createConversationService = (deps: ConversationsDeps) => {
         userId,
         conversationId,
         "message",
-        (text_) => workflowStore.applyUserText(userId, conversationId, text_, approvalId),
+        (text_) => workflowStore.applyUserText(userId, conversationId, text_, approvalId, memoryFactId),
         {
           text,
           clientMessageId,

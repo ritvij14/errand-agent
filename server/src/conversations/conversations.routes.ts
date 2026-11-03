@@ -105,6 +105,7 @@ export const createConversationsRouter = (deps: ConversationsRouterDeps): Router
         req.body?.text as string | undefined,
         req.body?.clientMessageId as string | undefined,
         typeof req.body?.approvalId === "string" ? req.body.approvalId : undefined,
+        typeof req.body?.memoryFactId === "string" ? req.body.memoryFactId : undefined,
       );
       if (!result.ok) return fail(res, result);
       res.status(200).json({ data: result.reply });

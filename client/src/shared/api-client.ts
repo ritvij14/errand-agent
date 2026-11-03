@@ -91,9 +91,20 @@ export const api = {
       `/conversations/${id}`,
       "GET",
     ),
-  /** `approvalId`: the card on screen, so a typed yes answers that card (§ 2.5.5 rule 1) */
-  sendMessage: (id: string, text: string, clientMessageId: string, approvalId?: string) =>
-    request<Reply>(`/conversations/${id}/messages`, "POST", { text, clientMessageId, approvalId }),
+  /** `approvalId` / `memoryFactId`: the card on screen, so a yes / no answers that card (§ 2.5.5 rule 1, 2.5.8) */
+  sendMessage: (
+    id: string,
+    text: string,
+    clientMessageId: string,
+    approvalId?: string,
+    memoryFactId?: string,
+  ) =>
+    request<Reply>(`/conversations/${id}/messages`, "POST", {
+      text,
+      clientMessageId,
+      approvalId,
+      memoryFactId,
+    }),
   decideApproval: (approvalId: string, decision: "approve" | "decline") =>
     request<Reply>(`/approvals/${approvalId}/decision`, "POST", { decision }),
   // FR-12 (U34): the memory panel — the same facts chat saves, listed and edited directly

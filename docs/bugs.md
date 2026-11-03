@@ -144,6 +144,13 @@ _B9–B13 were found by the post-build requirements review (driving the agent th
 - **Fix.** `server/src/agent/workflow.ts` `proposeFromHistory` → `proposeArea` / `proposeEarliestTime` (one proposal per request, provider → area → time; same `awaiting_confirmation` → yes/no path); `decideMemoryConfirm` applies a confirmed earliest time to the window; a detail the user names while the ask waits wins and drops the ask.
 - **Regression tests (red → green).** `agent/memory.flow.test.ts` "two completed bookings in one area propose that area…", "the same 'not before 10' in two finished bookings proposes an earliest time…" (both red); guards green from the start: "'no' to the proposed area forgets it…", "an area the user names while the proposal waits wins…", "a request that gives its own earliest time is not asked…". Found in a design-vs-code review.
 
+### B18 — A chat "yes" applied a memory fact the user had already rejected in the panel
+
+- **What broke.** With an inferred area waiting in chat, the user rejected it in the memory panel, then said "yes" in chat: the rejected area filled the booking anyway ("Using your saved area: Jayanagar"). A typed yes also had no way to say *which* memory question it answered.
+- **Why.** The chat answer only looked at the workflow's `pending_question`, never at the fact's current status; panel decisions happen outside a run and don't touch the workflow.
+- **Fix.** `server/src/agent/workflow.ts` `answerMemoryCard`: decides only when the card's `memoryFactId` is the waiting question and the fact is still `awaiting_confirmation`; otherwise it changes nothing and says so (`MEMORY_CONFIRM_STALE`). The reply carries a `memory_confirm` card (`client/src/components/MemoryConfirmCard.tsx`: Keep / Don't keep), and every yes / no carries its `memoryFactId`.
+- **Regression tests (red → green).** `agent/memory.flow.test.ts` "Keep on a card already answered in the memory panel changes nothing and says so — never a booking report" (red: the rejected area was applied), "a 'yes' carrying a different fact's id never confirms the waiting one", "the proposal comes with a memory card naming the waiting fact…"; `client/src/screens/Chat.test.tsx` "Chat — memory card" (4 tests).
+
 ## Invariants found broken by tests
 
 _None yet._

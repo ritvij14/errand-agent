@@ -370,6 +370,7 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     conversationId: string,
     text: string,
     approvalId?: string,
+    memoryFactId?: string,
   ): Promise<ApplyOutcome> => {
     const active = getActive(conversationId);
     // R6: memory-sourced facts are re-checked at every run start — a fact the user forgot
@@ -396,10 +397,18 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     if (read.kind === "cancel") return startChange("cancel", userId, conversationId, synced, text);
     if (read.kind === "reschedule")
       return startChange("reschedule", userId, conversationId, synced, text, read.timeWindow);
+    // a yes / no from a memory card answers exactly that card's fact, like an approval card (R2)
+    if (memoryFactId && read.kind === "decision")
+      return answerMemoryCard(active, userId, memoryFactId, read.decision === "yes");
     if (active?.pending_question && read.kind === "decision") {
       const pending = JSON.parse(active.pending_question) as { type?: string; text?: string };
       if (pending.type === "memory_confirm" && !approvals.getOpen(active.id)) {
-        return decideMemoryConfirm(active, userId, conversationId, pending as never, read.decision === "yes");
+        return answerMemoryCard(
+          active,
+          userId,
+          (pending as { factId: string }).factId,
+          read.decision === "yes",
+        );
       }
       if (pending.type === "task_switch" && !approvals.getOpen(active.id)) {
         const ended = saveWorkflow(conversationId, active.version, (w) => ({
@@ -657,7 +666,20 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
     const outcome = await advance(withPendingRow!);
     let prefix = `${memoryNotes.join(" ")}${differs}`.trim();
     if (proposal) prefix = `${prefix} ${proposal.ask}`.trim();
-    return prefix ? { ...outcome, reply: `${prefix} ${outcome.reply}`.trim() } : outcome;
+    // the memory card is drawn from the waiting fact, like an approval card from its record
+    const parts = proposal
+      ? [
+          ...(outcome.parts ?? []),
+          {
+            type: "memory_confirm",
+            factId: proposal.factId,
+            key: proposal.key,
+            label: proposal.label,
+            ask: proposal.ask,
+          },
+        ]
+      : outcome.parts;
+    return prefix ? { ...outcome, parts, reply: `${prefix} ${outcome.reply}`.trim() } : outcome;
   };
 
   return {
@@ -1630,6 +1652,44 @@ export const createWorkflowStore = (db: Db, clock: Clock, model: AgentModel) => 
       service,
       label: pick.name,
     };
+  }
+
+  /**
+   * A memory card's yes / no (2.5.8): decided only while that exact fact is the waiting
+   * question and still `awaiting_confirmation`. Another card's id, or a fact already
+   * answered elsewhere (the memory panel), changes nothing and says so.
+   */
+  function answerMemoryCard(
+    active: WorkflowRow | undefined,
+    userId: string,
+    factId: string,
+    yes: boolean,
+  ): ApplyOutcome {
+    const pending = active?.pending_question
+      ? (JSON.parse(active.pending_question) as { type?: string; factId?: string })
+      : undefined;
+    const phase = active?.phase ?? "collecting";
+    const facts = active?.facts ?? ({} as Facts);
+    if (!active || pending?.type !== "memory_confirm" || pending.factId !== factId)
+      return {
+        phase,
+        reply: "That suggestion is no longer open — nothing changed.",
+        facts,
+        code: "MEMORY_CONFIRM_STALE",
+      };
+    if (memoryApi.byId(db, userId, factId)?.status !== "awaiting_confirmation") {
+      const cleared = saveWorkflow(active.conversation_id, active.version, (w) => ({
+        ...w,
+        pending_question: null,
+      }));
+      return {
+        phase,
+        reply: "You already answered that in your memory panel — nothing changed here.",
+        facts: (cleared.workflow ?? active).facts,
+        code: "MEMORY_CONFIRM_STALE",
+      };
+    }
+    return decideMemoryConfirm(active, userId, active.conversation_id, pending as never, yes);
   }
 
   /**

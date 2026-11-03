@@ -140,7 +140,7 @@ describe("Chat — booking parts (FR-9, FR-10, ADR-007)", () => {
     await user.click(button("Tue 3 Nov at 09:00"));
     await user.click(button("Confirm"));
     await waitFor(() =>
-      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", PICK, expect.any(String), undefined),
+      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", PICK, expect.any(String), undefined, undefined),
     );
   });
 
@@ -148,7 +148,7 @@ describe("Chat — booking parts (FR-9, FR-10, ADR-007)", () => {
     const user = await openConversation();
     await user.type(screen.getByPlaceholderText(/Find a plumber/), "yes{Enter}");
     await waitFor(() =>
-      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", "yes", expect.any(String), "a1"),
+      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", "yes", expect.any(String), "a1", undefined),
     );
   });
 
@@ -166,5 +166,76 @@ describe("Chat — booking parts (FR-9, FR-10, ADR-007)", () => {
     expect(button("Decline").disabled).toBe(true);
     expect(button("Confirm").disabled).toBe(true);
     expect((screen.getByRole("button", { name: /Send|…/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("Chat — memory card (2.5.8: confirm an inferred fact)", () => {
+  const MEMORY_MESSAGES = [
+    {
+      id: "m1",
+      role: "agent",
+      text: "Your last two bookings were in Jayanagar — use Jayanagar again?",
+      runId: "r1",
+      parts: [
+        {
+          type: "memory_confirm",
+          factId: "f1",
+          key: "area",
+          label: "Jayanagar",
+          ask: "Your last two bookings were in Jayanagar — use Jayanagar again?",
+        },
+      ],
+    },
+  ];
+  const openMemoryCard = async () => {
+    mocked.conversation.mockResolvedValue({
+      conversation: { id: "c1" },
+      messages: MEMORY_MESSAGES,
+      busy: false,
+    });
+    const user = userEvent.setup();
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <Chat />
+      </QueryClientProvider>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Plumber this week" }));
+    await screen.findByRole("button", { name: "Keep" });
+    return user;
+  };
+
+  it("Keep answers yes for exactly that fact", async () => {
+    const user = await openMemoryCard();
+    await user.click(button("Keep"));
+    await waitFor(() =>
+      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", "yes", expect.any(String), undefined, "f1"),
+    );
+  });
+
+  it("Don't keep answers no for exactly that fact", async () => {
+    const user = await openMemoryCard();
+    await user.click(button("Don't keep"));
+    await waitFor(() =>
+      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", "no", expect.any(String), undefined, "f1"),
+    );
+  });
+
+  it("a typed yes with the memory card newest on screen carries that fact's id", async () => {
+    const user = await openMemoryCard();
+    await user.type(screen.getByPlaceholderText(/Find a plumber/), "yes{Enter}");
+    await waitFor(() =>
+      expect(mocked.sendMessage).toHaveBeenCalledWith("c1", "yes", expect.any(String), undefined, "f1"),
+    );
+  });
+
+  it("Keep and Don't keep are disabled while a reply is pending", async () => {
+    mocked.sendMessage.mockReturnValue(new Promise(() => undefined)); // never answers
+    const user = await openMemoryCard();
+    await user.click(button("Keep"));
+    await waitFor(() => expect(button("Keep").disabled).toBe(true));
+    expect(button("Don't keep").disabled).toBe(true);
   });
 });
